@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Interface utilisateur Gradio pour OCR Juridique v7 - VERSION COMPLÈTE
+Interface utilisateur Gradio pour OCR Juridique v7 - VERSION COMPLÈTE CORRIGÉE
 """
 
 import os
@@ -13,7 +13,7 @@ from config import DEFAULT_PROMPT_NAME, DEFAULT_PROMPT_TEXT, PROMPT_STORE_PATH, 
 from file_processing import get_file_type, read_text_file, smart_clean
 from anonymization import anonymize_text
 from cache_manager import get_pdf_hash, load_ocr_cache, clear_ocr_cache
-from ai_providers import get_ollama_models, refresh_models
+from ai_providers import get_ollama_models, refresh_models, test_connection
 from prompt_manager import load_prompt_store
 from processing_pipeline import process_file_to_text, do_analysis_only
 
@@ -55,23 +55,34 @@ def build_ui():
                 value="Ollama local"
             )
         
+        # Champs de configuration - toujours présents mais visibilité conditionnelle
         with gr.Row():
-            ollama_url = gr.Textbox(
-                label="URL Ollama distant", 
-                value="http://localhost:11434",
-                visible=False
-            )
-            runpod_endpoint = gr.Textbox(
-                label="Endpoint RunPod", 
-                placeholder="https://api.runpod.ai/v2/xxx/openai/v1",
-                visible=False
-            )
-            runpod_token = gr.Textbox(
-                label="Token RunPod", 
-                placeholder="Token d'authentification",
-                type="password",
-                visible=False
-            )
+            with gr.Column():
+                ollama_url = gr.Textbox(
+                    label="URL Ollama distant", 
+                    value="http://localhost:11434",
+                    placeholder="ex: http://192.168.1.100:11434 ou myserver.com:11434",
+                    interactive=True,
+                    visible=False
+                )
+            with gr.Column():
+                runpod_endpoint = gr.Textbox(
+                    label="Endpoint RunPod", 
+                    placeholder="https://api.runpod.ai/v2/xxx/openai/v1",
+                    interactive=True,
+                    visible=False
+                )
+                runpod_token = gr.Textbox(
+                    label="Token RunPod", 
+                    placeholder="Token d'authentification",
+                    type="password",
+                    interactive=True,
+                    visible=False
+                )
+        
+        with gr.Row():
+            test_connection_btn = gr.Button("Tester la connexion", variant="secondary", size="sm", visible=False)
+            connection_status = gr.Markdown("✅ Utilisation d'Ollama local sur http://localhost:11434", visible=True)
 
         # Section Modèle et paramètres
         with gr.Row():
@@ -140,27 +151,54 @@ def build_ui():
         analysis_metadata = gr.State(value={})
 
         # =============================================================================
-        # FONCTIONS CALLBACK
+        # FONCTIONS CALLBACK - TOUTES CORRIGÉES AVEC gr.update()
         # =============================================================================
 
         def clear_cache():
             """Vide le cache OCR."""
             count = clear_ocr_cache()
             if count > 0:
-                return gr.Markdown.update(value=f"Cache vidé : {count} fichier(s) supprimé(s)")
+                return gr.update(value=f"Cache vidé : {count} fichier(s) supprimé(s)")
             else:
-                return gr.Markdown.update(value="Cache déjà vide")
+                return gr.update(value="Cache déjà vide")
 
         def on_provider_change(provider):
             """Gère le changement de fournisseur."""
             ollama_visible = provider == "Ollama distant"
             runpod_visible = provider == "RunPod.io"
+            test_btn_visible = provider != "Ollama local"
+            
+            # Réinitialiser les champs selon le fournisseur
+            ollama_url_value = "http://localhost:11434" if ollama_visible else ""
+            runpod_endpoint_value = "" if runpod_visible else ""
+            runpod_token_value = "" if runpod_visible else ""
+            
+            status_message = ""
+            if provider == "Ollama local":
+                status_message = "✅ Utilisation d'Ollama local sur http://localhost:11434"
+            elif provider == "Ollama distant":
+                status_message = "⚙️ Configurez l'URL de votre serveur Ollama distant dans le champ ci-dessous"
+            elif provider == "RunPod.io":
+                status_message = "⚙️ Configurez votre endpoint et token RunPod dans les champs ci-dessous"
             
             return (
-                gr.Textbox.update(visible=ollama_visible),
-                gr.Textbox.update(visible=runpod_visible),
-                gr.Textbox.update(visible=runpod_visible)
+                gr.update(visible=ollama_visible, value=ollama_url_value, interactive=True),
+                gr.update(visible=runpod_visible, value=runpod_endpoint_value, interactive=True),
+                gr.update(visible=runpod_visible, value=runpod_token_value, interactive=True),
+                gr.update(visible=test_btn_visible),
+                gr.update(visible=True, value=status_message)
             )
+
+        def on_test_connection(provider, ollama_url_val, runpod_endpoint, runpod_token):
+            """Test la connexion au fournisseur sélectionné."""
+            result = test_connection(provider, ollama_url_val, runpod_endpoint, runpod_token)
+            return gr.update(value=result)
+
+        def auto_refresh_on_url_change(provider, ollama_url_val):
+            """Actualise automatiquement les modèles quand l'URL Ollama change."""
+            if provider == "Ollama distant" and ollama_url_val.strip():
+                return refresh_models(provider, ollama_url_val)
+            return gr.update(), ""
 
         def launch_processing_only(file_path, nettoyer, anonymiser, force_processing):
             """Lance uniquement le traitement du fichier."""
@@ -299,9 +337,9 @@ def build_ui():
                 if name not in store:
                     name = DEFAULT_PROMPT_NAME
                 text = store.get(name, DEFAULT_PROMPT_TEXT)
-                return gr.Textbox.update(value=text)
+                return gr.update(value=text)
             except Exception as e:
-                return gr.Textbox.update(value=DEFAULT_PROMPT_TEXT)
+                return gr.update(value=DEFAULT_PROMPT_TEXT)
 
         # =============================================================================
         # CONNEXIONS DES ÉVÉNEMENTS
@@ -311,7 +349,21 @@ def build_ui():
         provider_choice.change(
             fn=on_provider_change,
             inputs=[provider_choice],
-            outputs=[ollama_url, runpod_endpoint, runpod_token]
+            outputs=[ollama_url, runpod_endpoint, runpod_token, test_connection_btn, connection_status]
+        )
+
+        # Test de connexion
+        test_connection_btn.click(
+            fn=on_test_connection,
+            inputs=[provider_choice, ollama_url, runpod_endpoint, runpod_token],
+            outputs=[connection_status]
+        )
+
+        # Auto-actualisation quand l'URL Ollama change
+        ollama_url.change(
+            fn=auto_refresh_on_url_change,
+            inputs=[provider_choice, ollama_url],
+            outputs=[modele, cache_info]
         )
 
         # Upload de fichier

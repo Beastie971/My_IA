@@ -17,6 +17,11 @@ def generate_with_ollama(model: str, prompt_text: str, full_text: str,
                          num_ctx: int, num_predict: int, temperature: float = 0.2,
                          timeout: int = 900, ollama_url: str = "http://localhost:11434") -> str:
     """Génère une réponse avec Ollama."""
+    # Calculer un timeout intelligent si non spécifié
+    if timeout is None:
+        timeout = calculate_smart_timeout(len(full_text), model)
+        print(f"Timeout calculé automatiquement : {timeout}s")
+    
     url = f"{ollama_url}/api/generate"
     
     payload = {
@@ -182,7 +187,7 @@ def refresh_models(provider, ollama_url):
         info += f" ({ollama_url})"
     info += f" : {len(models)} modèle(s) trouvé(s)"
     
-    return gr.Dropdown.update(choices=models, value=models[0] if models else ""), info
+    return gr.update(choices=models, value=models[0] if models else ""), info
 
 def validate_ollama_url(url: str) -> tuple:
     """Valide une URL Ollama et teste la connexion."""
