@@ -100,7 +100,7 @@ def build_ui():
             
         with gr.Row():
             profil = gr.Radio(label="Profil", choices=["Rapide", "Confort", "Maxi"], value="Confort")
-            max_tokens_out = gr.Slider(label="Longueur (tokens)", minimum=256, maximum=2048, step=128, value=1280)
+            max_tokens_out = gr.Slider(label="Longueur (tokens)", minimum=256, maximum=4096, step=128, value=4096)
         
         with gr.Row():
             mode_analysis = gr.Radio(label="Mode", choices=["Standard", "Expert"], value="Standard")
