@@ -15,7 +15,7 @@ IMPORTANT :
 - Dans la section [motivation], chaque titre doit commencer par « Sur… » et ne contenir que les points de droit à trancher.
 - Ne mets pas de puces ni de phrases introductives dans la section [motivation], uniquement des titres.
 - Recherche activement les mentions explicites ou implicites de : licenciement verbal, rupture de fait, prise d’acte, résiliation judiciaire, non-remise des documents de fin de contrat, heures supplémentaires, harcèlement, discrimination, perte de chance, rappel de salaire, indemnités, article 700 du CPC.
-- Si le texte contient des indices (ex. remplacement avant entretien), interprète-les juridiquement et intègre-les dans l’analyse.
+- Si le texte contient des indices (ex. remplacement avant entretien, décision actée avant la lettre), interprète-les juridiquement comme un licenciement verbal ou une rupture de fait et intègre-les dans l’analyse.
 - L’analyse doit être détaillée : un paragraphe complet par moyen identifié.
 
 Structure ta réponse en trois parties distinctes avec les balises suivantes :

@@ -33,6 +33,7 @@ def generate_with_ollama(model: str, prompt_text: str, full_text: str,
             "num_ctx": int(num_ctx),
             "num_predict": int(num_predict),
             "temperature": float(temperature),
+            "repeat_penalty": 1.2,
         },
     }
     
