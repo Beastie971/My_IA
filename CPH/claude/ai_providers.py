@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-API Ollama et RunPod pour OCR Juridique v7
+API Ollama et RunPod pour OCR Juridique v7.2-SYSTEM-PROMPT-FIXED
+Version: 7.2-SYSTEM-PROMPT-FIXED - Assure la bonne séparation système/utilisateur
+Date: 2025-01-04
 """
 
 import json
@@ -10,32 +12,41 @@ import requests
 import gradio as gr
 
 # =============================================================================
-# API OLLAMA/RUNPOD
+# API OLLAMA/RUNPOD AVEC SÉPARATION SYSTÈME/UTILISATEUR CLAIRE
 # =============================================================================
 
-def generate_with_ollama(model: str, prompt_text: str, full_text: str,
+def generate_with_ollama(model: str, system_prompt: str, user_text: str,
                          num_ctx: int, num_predict: int, temperature: float = 0.2,
                          timeout: int = 900, ollama_url: str = "http://localhost:11434") -> str:
-    """Génère une réponse avec Ollama."""
+    """Génère une réponse avec Ollama - Version avec séparation système/utilisateur."""
     # Calculer un timeout intelligent si non spécifié
     if timeout is None:
-        timeout = calculate_smart_timeout(len(full_text), model)
+        timeout = calculate_smart_timeout(len(user_text), model)
         print(f"Timeout calculé automatiquement : {timeout}s")
     
     url = f"{ollama_url}/api/generate"
     
+    # SÉPARATION CLAIRE : prompt système vs texte utilisateur
     payload = {
-        "model": model,
-        "prompt": f"Texte à analyser :\n{full_text}",
-        "system": prompt_text,
-        "stream": True,
+        "model": modele,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": text}
+        ],
         "options": {
-            "num_ctx": int(num_ctx),
-            "num_predict": int(num_predict),
-            "temperature": float(temperature),
-            "repeat_penalty": 1.2,
+            "temperature": temperature,
+            "top_p": top_p,
+            "num_predict": max_tokens_out,
+            "num_gpu": 50,  # Utiliser plus de GPU
+            "num_batch": 512,  # Augmenter la taille de batch
+            "num_thread": 8,  # Parallélisation CPU
+            "repeat_penalty": 1.1
         },
+       "stream": False
     }
+    
+    print(f"🤖 Ollama - Prompt système : {len(system_prompt)} caractères")
+    print(f"📄 Ollama - Texte utilisateur : {len(user_text)} caractères")
     
     try:
         response = requests.post(url, json=payload, stream=True, timeout=timeout)
@@ -76,18 +87,19 @@ def generate_with_ollama(model: str, prompt_text: str, full_text: str,
     result = "".join(parts).strip()
     return result if result else "❌ Aucune réponse reçue (flux vide)."
 
-def generate_with_runpod(model: str, prompt_text: str, full_text: str,
+def generate_with_runpod(model: str, system_prompt: str, user_text: str,
                         num_ctx: int, num_predict: int, temperature: float = 0.2,
                         timeout: int = 900, endpoint: str = "", token: str = "") -> str:
-    """Génère une réponse avec RunPod API."""
+    """Génère une réponse avec RunPod API - Version avec séparation système/utilisateur."""
     if not endpoint or not token:
         return "❌ Endpoint et token RunPod requis"
     
     url = f"{endpoint}/v1/chat/completions"
     
+    # SÉPARATION CLAIRE : messages système vs utilisateur
     messages = [
-        {"role": "system", "content": prompt_text},
-        {"role": "user", "content": f"Texte à analyser :\n{full_text}"}
+        {"role": "system", "content": system_prompt},  # Prompt système (instructions)
+        {"role": "user", "content": user_text}         # Texte utilisateur
     ]
     
     payload = {
@@ -102,6 +114,9 @@ def generate_with_runpod(model: str, prompt_text: str, full_text: str,
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
+    
+    print(f"🤖 RunPod - Prompt système : {len(system_prompt)} caractères")
+    print(f"📄 RunPod - Texte utilisateur : {len(user_text)} caractères")
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=timeout)
@@ -120,6 +135,10 @@ def generate_with_runpod(model: str, prompt_text: str, full_text: str,
         return f"❌ Erreur : Délai dépassé ({timeout}s)."
     except Exception as e:
         return f"❌ Erreur RunPod : {e}"
+
+# =============================================================================
+# FONCTIONS UTILITAIRES INCHANGÉES
+# =============================================================================
 
 def get_ollama_models(ollama_url: str = "http://localhost:11434"):
     """Récupère la liste des modèles Ollama disponibles."""
@@ -248,3 +267,25 @@ def test_connection(provider, ollama_url, runpod_endpoint, runpod_token):
             return f"Test connexion RunPod : Erreur - {str(e)}"
     
     return "Test connexion : Fournisseur non reconnu"
+
+def calculate_smart_timeout(text_length: int, model: str) -> int:
+    """Calcule un timeout intelligent basé sur la longueur du texte et le modèle."""
+    base_timeout = 60
+    text_factor = max(1, text_length // 1000)  # 1 seconde par 1000 caractères
+    
+    # Facteur modèle (certains modèles sont plus lents)
+    model_factors = {
+        "llama": 2,
+        "mistral": 1.5,
+        "deepseek": 1.3,
+        "default": 1
+    }
+    
+    model_factor = model_factors.get("default", 1)
+    for key, factor in model_factors.items():
+        if key in model.lower():
+            model_factor = factor
+            break
+    
+    timeout = int(base_timeout + (text_factor * model_factor))
+    return min(timeout, 1800)  # Maximum 30 minutes

@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Pipeline de traitement pour OCR Juridique v7
+Pipeline de traitement pour OCR Juridique v7.2-SYSTEM-PROMPT-FIXED
+Version: 7.2-SYSTEM-PROMPT-FIXED - Séparation claire prompt système/utilisateur
+Date: 2025-01-04
 """
 
 import os
@@ -20,7 +22,7 @@ from cache_manager import get_pdf_hash, load_ocr_cache, save_ocr_cache
 from ai_providers import generate_with_ollama, generate_with_runpod
 
 # =============================================================================
-# PIPELINE DE TRAITEMENT
+# PIPELINE DE TRAITEMENT INCHANGÉ
 # =============================================================================
 
 def process_file_to_text(file_path, nettoyer, anonymiser, force_ocr=False):
@@ -117,20 +119,21 @@ def process_file_to_text(file_path, nettoyer, anonymiser, force_ocr=False):
         stats = "Erreur - Impossible de calculer les statistiques"
         return error_msg, stats, "", file_type, ""
 
-def do_analysis_only(text_content, modele, profil, max_tokens_out, prompt_text, mode_analysis, 
+def do_analysis_only(user_text, modele, profil, max_tokens_out, system_prompt, mode_analysis, 
                     comparer, source_type="UNKNOWN", anonymiser=False, use_runpod=False, 
                     runpod_endpoint="", runpod_token="", ollama_url="http://localhost:11434"):
-    """Effectue uniquement l'analyse du texte."""
-    if not text_content or not text_content.strip():
+    """Effectue uniquement l'analyse du texte avec séparation système/utilisateur."""
+    if not user_text or not user_text.strip():
         return "❌ Aucun texte disponible pour l'analyse.", "", "", {}
     
     start_time = time.time()
     
     try:
-        text_length = len(text_content)
+        text_length = len(user_text)
         estimated_tokens = text_length // 4
         
-        print(f"📊 Longueur du texte : {text_length:,} caractères (≈{estimated_tokens:,} tokens)")
+        print(f"📊 Longueur du texte utilisateur : {text_length:,} caractères (≈{estimated_tokens:,} tokens)")
+        print(f"📝 Longueur du prompt système : {len(system_prompt):,} caractères")
         
         if estimated_tokens > 20000:
             print("⚠️ Document très volumineux détecté - recommandation profil 'Maxi'")
@@ -150,19 +153,29 @@ def do_analysis_only(text_content, modele, profil, max_tokens_out, prompt_text, 
             print(f"⚠️ ATTENTION : Le texte ({estimated_tokens:,} tokens) approche la limite du contexte ({num_ctx:,})")
             print("Considérez utiliser le profil 'Maxi' pour de meilleurs résultats")
 
-        main_prompt = EXPERT_PROMPT_TEXT if (mode_analysis or "").lower().startswith("expert") else prompt_text
+        # Utiliser le prompt système tel quel (déjà préparé par l'interface)
+        final_system_prompt = system_prompt
+        
+        # Si mode Expert, utiliser le prompt expert au lieu du prompt fourni
+        if (mode_analysis or "").lower().startswith("expert"):
+            print("🎓 Mode Expert activé - Utilisation du prompt expert")
+            final_system_prompt = EXPERT_PROMPT_TEXT
 
         print(f"🤖 Génération avec {modele} en mode {mode_analysis}...")
+        print(f"🔧 Paramètres : contexte={num_ctx}, max_tokens={max_tokens_out}, temp={temperature}")
         
+        # APPEL AVEC SÉPARATION SYSTÈME/UTILISATEUR
         if use_runpod:
+            print("☁️ Utilisation de RunPod...")
             analyse = generate_with_runpod(
-                modele, main_prompt, text_content,
+                modele, final_system_prompt, user_text,
                 num_ctx=num_ctx, num_predict=max_tokens_out, temperature=temperature,
                 endpoint=runpod_endpoint, token=runpod_token
             )
         else:
+            print("🏠 Utilisation d'Ollama...")
             analyse = generate_with_ollama(
-                modele, main_prompt, text_content,
+                modele, final_system_prompt, user_text,
                 num_ctx=num_ctx, num_predict=max_tokens_out, temperature=temperature,
                 ollama_url=ollama_url
             )
@@ -178,46 +191,33 @@ def do_analysis_only(text_content, modele, profil, max_tokens_out, prompt_text, 
             'max_tokens': max_tokens_out,
             'temperature': temperature,
             'processing_time': processing_time,
-            'prompt': main_prompt,
+            'system_prompt_length': len(final_system_prompt),
+            'user_text_length': len(user_text),
             'source_type': source_type,
             'anonymiser': anonymiser,
             'provider': 'RunPod' if use_runpod else 'Ollama'
         }
 
         provider_info = f"RunPod ({runpod_endpoint})" if use_runpod else f"Ollama ({ollama_url})"
-        params_info = f"""
-=== PARAMÈTRES D'ANALYSE ===
-Fournisseur : {provider_info}
-Type de source : {source_type}
-Modèle : {modele}
-Mode : {mode_analysis}
-Profil : {profil} (contexte: {num_ctx}, température: {temperature})
-Longueur max : {max_tokens_out} tokens
-Temps de traitement : {processing_time}s
-Anonymisation : {'Oui' if anonymiser else 'Non'}
-Date : {metadata['timestamp']}
-========================
-
-"""
-
-        analyse_avec_params = params_info + analyse
-
+        
+        # Pas de params_info ici - c'est géré par l'interface
+        
         qc_or_compare = ""
         analyse_alt = ""
 
         if comparer:
             print("⚖️ Génération comparative...")
-            alt_prompt = DEFAULT_PROMPT_TEXT if (mode_analysis or "").lower().startswith("expert") else EXPERT_PROMPT_TEXT
+            alt_system_prompt = DEFAULT_PROMPT_TEXT if (mode_analysis or "").lower().startswith("expert") else EXPERT_PROMPT_TEXT
             
             if use_runpod:
                 analyse_alt = generate_with_runpod(
-                    modele, alt_prompt, text_content,
+                    modele, alt_system_prompt, user_text,
                     num_ctx=num_ctx, num_predict=max_tokens_out, temperature=temperature,
                     endpoint=runpod_endpoint, token=runpod_token
                 )
             else:
                 analyse_alt = generate_with_ollama(
-                    modele, alt_prompt, text_content,
+                    modele, alt_system_prompt, user_text,
                     num_ctx=num_ctx, num_predict=max_tokens_out, temperature=temperature,
                     ollama_url=ollama_url
                 )
@@ -243,7 +243,7 @@ Date : {metadata['timestamp']}
             
             qc_or_compare = _summary_diff(analyse, analyse_alt)
 
-        return analyse_avec_params, analyse_alt, qc_or_compare, metadata
+        return analyse, analyse_alt, qc_or_compare, metadata
 
     except Exception as e:
         traceback.print_exc()
