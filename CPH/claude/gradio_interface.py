@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-Interface utilisateur Gradio pour OCR Juridique - VERSION CORRIGÉE
-Version: 8.3-MODULES-EXISTANTS
+Interface utilisateur Gradio pour OCR Juridique - VERSION AVEC .ENV
+Version: 8.4-ENV-COMPLETE
 Date: 2025-09-16
-Utilise VOS modules existants au lieu de chercher des modules inexistants
+Utilise VOS modules existants + gestion sécurisée des clés API via .env
 """
 
 import os
@@ -17,7 +17,15 @@ import time
 import requests
 
 # ========================================
-# IMPORTS DES MODULES EXISTANTS RÉELS
+# VARIABLES GLOBALES - INITIALISATION
+# ========================================
+
+# Initialiser les variables globalement pour éviter les erreurs
+MODULES_AVAILABLE = False
+ENV_AVAILABLE = False
+
+# ========================================
+# IMPORTS DES MODULES EXISTANTS + ENV
 # ========================================
 
 try:
@@ -41,8 +49,23 @@ except ImportError as e:
     print(f"❌ Erreur import modules: {e}")
     MODULES_AVAILABLE = False
 
+# Gestionnaire d'environnement (nouveau)
+try:
+    from env_manager import (
+        env_manager, 
+        get_api_config, 
+        get_app_config, 
+        get_chunk_config,
+        create_env_management_interface
+    )
+    ENV_AVAILABLE = True
+    print("✅ Gestionnaire .env chargé")
+except ImportError:
+    ENV_AVAILABLE = False
+    print("⚠️ Gestionnaire .env non disponible - continuez avec interface actuelle")
+
 # ========================================
-# CONFIGURATION RÉELLE BASÉE SUR VOS MODULES
+# CONFIGURATION RÉELLE BASÉE SUR VOS MODULES + .ENV
 # ========================================
 
 # Domaines supportés (basés sur vos prompts existants)
@@ -61,13 +84,33 @@ SYNTHESIS_TYPES = {
     "conclusions": "Conclusions juridiques"
 }
 
-# Configuration par défaut
-DEFAULT_CONFIG = {
-    "provider": "Ollama local",
-    "chunk_size": 3000,
-    "chunk_overlap": 200,
-    "ollama_url": "http://localhost:11434"
-}
+# Configuration depuis .env si disponible, sinon par défaut
+if ENV_AVAILABLE and MODULES_AVAILABLE:
+    try:
+        api_config = get_api_config()
+        chunk_config = get_chunk_config()
+        DEFAULT_CONFIG = {
+            "provider": "Ollama local",
+            "chunk_size": chunk_config["chunk_size"],
+            "chunk_overlap": chunk_config["chunk_overlap"],
+            "ollama_url": api_config["ollama_url"]
+        }
+        print(f"🔑 Configuration chargée depuis .env")
+    except Exception as e:
+        print(f"⚠️ Erreur .env: {e}, utilisation config par défaut")
+        DEFAULT_CONFIG = {
+            "provider": "Ollama local",
+            "chunk_size": 3000,
+            "chunk_overlap": 200,
+            "ollama_url": "http://localhost:11434"
+        }
+else:
+    DEFAULT_CONFIG = {
+        "provider": "Ollama local",
+        "chunk_size": 3000,
+        "chunk_overlap": 200,
+        "ollama_url": "http://localhost:11434"
+    }
 
 app_state = {
     "current_provider": "Ollama local",
@@ -78,7 +121,7 @@ app_state = {
 }
 
 # ========================================
-# GESTION ARRÊT AUTOMATIQUE RUNPOD (CONSERVÉ)
+# GESTION ARRÊT AUTOMATIQUE RUNPOD
 # ========================================
 
 class RunPodManager:
@@ -204,6 +247,20 @@ def analyze_hybrid_mode(text1, text2, prompt, model_step1, model_step2, model_st
     """Analyse hybride en utilisant VOS modules existants."""
     
     track_activity()
+    
+    # Si .env disponible et paramètres manquants, utiliser .env
+    if ENV_AVAILABLE:
+        try:
+            config = get_api_config()
+            if not ollama_url and provider == "Ollama distant":
+                ollama_url = config.get("ollama_remote_url", ollama_url)
+            if provider == "RunPod.io":
+                if not runpod_endpoint:
+                    runpod_endpoint = config.get("runpod_endpoint", "")
+                if not runpod_token:
+                    runpod_token = config.get("runpod_token", "")
+        except:
+            pass
     
     if not MODULES_AVAILABLE:
         return fallback_analysis(text1, text2, prompt)
@@ -363,6 +420,7 @@ ANALYSE À AMÉLIORER:
 HORODATAGE: {current_time}
 ARCHITECTURE: Extraction → Fusion → Synthèse
 {doc_info}
+CONFIGURATION: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
 
 MODÈLES UTILISÉS:
 🚀 Étape 1 (Extraction): {model_step1} - {step1_duration:.1f}s
@@ -402,6 +460,7 @@ PERFORMANCE:
 {'=' * 50}
 
 MODE: Hybride 3 étapes
+CONFIGURATION: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
 DOMAINE: {domain}
 SYNTHÈSE: {synthesis_type if enable_step3 else 'Désactivée'}
 
@@ -428,7 +487,7 @@ ARCHITECTURE:
 2. Fusion et harmonisation: {step2_duration:.1f}s
 3. Synthèse narrative: {step3_duration:.1f}s ({'Exécutée' if enable_step3 else 'Non exécutée'})
 
-Optimisation qualité/prix réussie
+Configuration: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
 Chunks traités: {len(chunks)}
 Efficacité: {len(chunks) / total_duration * 60:.1f} chunks/min"""
         
@@ -443,6 +502,20 @@ def analyze_classic_mode(text1, text2, prompt, model, provider, temperature, top
     """Analyse classique en utilisant VOS modules existants."""
     
     track_activity()
+    
+    # Si .env disponible et paramètres manquants, utiliser .env
+    if ENV_AVAILABLE:
+        try:
+            config = get_api_config()
+            if not ollama_url and provider == "Ollama distant":
+                ollama_url = config.get("ollama_remote_url", ollama_url)
+            if provider == "RunPod.io":
+                if not runpod_endpoint:
+                    runpod_endpoint = config.get("runpod_endpoint", "")
+                if not runpod_token:
+                    runpod_token = config.get("runpod_token", "")
+        except:
+            pass
     
     # Préparation du texte
     if text1 and text2:
@@ -488,6 +561,7 @@ MODÈLE: {model}
 FOURNISSEUR: {provider}
 MODE: Analyse directe
 TEXTE: {len(full_text):,} caractères
+CONFIGURATION: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
 
 {'-' * 80}
                         PROMPT UTILISÉ
@@ -510,7 +584,8 @@ TEXTE: {len(full_text):,} caractères
 Mode: Direct (sans chunks)
 Modèle: {model}
 Provider: {provider}
-Texte: {len(full_text):,} caractères"""
+Texte: {len(full_text):,} caractères
+Configuration: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}"""
         
         return (formatted_result, stats1, stats2, debug_info, "Mode classique")
         
@@ -544,12 +619,29 @@ def on_provider_change(provider):
         url_value = ""
         runpod_manager.disable_auto_stop()
     elif provider == "Ollama distant":
-        url_value = app_state["ollama_url"]
-        status = f"🌐 Ollama distant: {url_value}"
+        if ENV_AVAILABLE:
+            try:
+                config = get_api_config()
+                url_value = config.get("ollama_remote_url", app_state["ollama_url"])
+                status = f"🌐 Ollama distant: {url_value or 'Configurez dans .env'}"
+            except:
+                url_value = app_state["ollama_url"]
+                status = f"🌐 Ollama distant: {url_value}"
+        else:
+            url_value = app_state["ollama_url"]
+            status = f"🌐 Ollama distant: {url_value}"
         runpod_manager.disable_auto_stop()
     else:
         url_value = ""
-        status = "☁️ RunPod - Configurez endpoint et token"
+        if ENV_AVAILABLE:
+            try:
+                config = get_api_config()
+                configured = bool(config.get("runpod_endpoint") and config.get("runpod_token"))
+                status = f"☁️ RunPod: {'✅ Configuré dans .env' if configured else '❌ Configurez dans .env'}"
+            except:
+                status = "☁️ RunPod - Configurez endpoint et token"
+        else:
+            status = "☁️ RunPod - Configurez endpoint et token"
     
     return (
         gr.update(visible=ollama_visible, value=url_value),
@@ -571,6 +663,20 @@ def test_connection_real(provider, ollama_url, runpod_endpoint, runpod_token):
         )
     
     try:
+        # Si .env disponible et paramètres manquants, utiliser .env
+        if ENV_AVAILABLE:
+            try:
+                config = get_api_config()
+                if not ollama_url and provider == "Ollama distant":
+                    ollama_url = config.get("ollama_remote_url", ollama_url)
+                if provider == "RunPod.io":
+                    if not runpod_endpoint:
+                        runpod_endpoint = config.get("runpod_endpoint", "")
+                    if not runpod_token:
+                        runpod_token = config.get("runpod_token", "")
+            except:
+                pass
+        
         # Utiliser VOTRE fonction de test
         result = test_connection(provider, ollama_url, runpod_endpoint, runpod_token)
         
@@ -588,9 +694,10 @@ def test_connection_real(provider, ollama_url, runpod_endpoint, runpod_token):
                 ]
             
             app_state["models_list"] = models
+            suffix = " (.env)" if ENV_AVAILABLE else ""
             return (
                 gr.update(choices=models, value=models[0]),
-                gr.update(value=f"✅ {result} - {len(models)} modèles")
+                gr.update(value=f"✅ {result} - {len(models)} modèles{suffix}")
             )
         else:
             return (
@@ -605,6 +712,16 @@ def test_connection_real(provider, ollama_url, runpod_endpoint, runpod_token):
 
 def configure_runpod_autostop(runpod_endpoint, runpod_token, timeout_minutes):
     """Configure l'arrêt automatique RunPod."""
+    
+    # Si .env disponible et paramètres manquants, utiliser .env
+    if ENV_AVAILABLE and (not runpod_endpoint or not runpod_token):
+        try:
+            config = get_api_config()
+            runpod_endpoint = config.get("runpod_endpoint", runpod_endpoint)
+            runpod_token = config.get("runpod_token", runpod_token)
+        except:
+            pass
+    
     if runpod_endpoint and runpod_token:
         message = runpod_manager.configure_auto_stop(runpod_endpoint, runpod_token, timeout_minutes)
         return gr.update(value=f"✅ {message}")
@@ -660,7 +777,11 @@ def process_file_real(file_path, clean_text=True, anonymize=False):
 def clear_all_fields():
     """Nettoie tous les champs."""
     track_activity()
-    default_prompt = get_prompt_content("Analyse juridique hybride") or DEFAULT_PROMPT_TEXT
+    if MODULES_AVAILABLE:
+        default_prompt = get_prompt_content("Analyse juridique hybride") or DEFAULT_PROMPT_TEXT
+    else:
+        default_prompt = "Tu es un expert juridique. Analyse ce document en détail."
+    
     return (
         "",  # text1
         "",  # text2
@@ -674,29 +795,29 @@ def clear_all_fields():
     )
 
 # ========================================
-# INTERFACE GRADIO ADAPTÉE À VOS MODULES
+# INTERFACE GRADIO ADAPTÉE À VOS MODULES + .ENV
 # ========================================
 
 def create_hybrid_interface():
-    """Crée l'interface Gradio en utilisant VOS modules existants."""
+    """Crée l'interface Gradio en utilisant VOS modules existants + .env."""
     
     load_config()
     
     with gr.Blocks(
-        title="OCR Juridique - Mode Hybride",
+        title="OCR Juridique - Mode Hybride + .env",
         theme=gr.themes.Soft()
     ) as demo:
         
         gr.Markdown(f"""
-        # 📚 OCR Juridique - Mode Hybride v8.3
+        # 📚 OCR Juridique - Mode Hybride v8.4
         
-        **Analyse juridique optimisée** avec architecture 3 étapes utilisant VOS modules existants :
+        **Analyse juridique sécurisée** avec architecture 3 étapes et gestion .env
         
         📄 **Étape 1** : Extraction chunks → Modèle rapide (économique)  
         🔀 **Étape 2** : Fusion + harmonisation → Modèle contexte large  
         ✨ **Étape 3** : Synthèse narrative → Modèle qualité rédactionnelle
         
-        **État** : {'✅ Modules disponibles' if MODULES_AVAILABLE else '⚠️ Modules manquants'}
+        **État** : {'✅ Modules + .env disponibles' if MODULES_AVAILABLE and ENV_AVAILABLE else '⚠️ Configuration limitée'}
         """)
         
         with gr.Tabs():
@@ -777,6 +898,61 @@ def create_hybrid_interface():
                             top_p = gr.Slider(0, 1, value=0.9, step=0.1, label="Top-p")
                             max_tokens = gr.Slider(500, 8000, value=2000, step=500, label="Max tokens")
             
+            # ======= GESTION .ENV =======
+            with gr.Tab("🔐 Gestion .env"):
+                if ENV_AVAILABLE:
+                    gr.Markdown("""
+                    ### 🔐 Configuration sécurisée des clés API
+                    
+                    Gérez vos clés API via le fichier `.env` pour plus de sécurité.
+                    """)
+                    
+                    # Interface de gestion
+                    env_selector, env_value, env_status, env_report = create_env_management_interface()
+                    
+                    # Boutons supplémentaires
+                    with gr.Row():
+                        reload_env_btn = gr.Button("🔄 Recharger .env", variant="secondary")
+                        status_env_btn = gr.Button("📊 Statut complet", variant="primary")
+                    
+                    def reload_env_config():
+                        try:
+                            env_manager.load_env()
+                            return "✅ Configuration .env rechargée"
+                        except Exception as e:
+                            return f"❌ Erreur: {e}"
+                    
+                    def get_env_status():
+                        try:
+                            return env_manager.status_report()
+                        except Exception as e:
+                            return f"❌ Erreur: {e}"
+                    
+                    reload_env_btn.click(reload_env_config, outputs=[env_status])
+                    status_env_btn.click(get_env_status, outputs=[env_report])
+                    
+                else:
+                    gr.Markdown("""
+                    ⚠️ **Gestionnaire .env non disponible**
+                    
+                    Pour activer la gestion sécurisée des clés API:
+                    
+                    1. **Téléchargez** le fichier `env_manager.py`
+                    2. **Placez-le** dans le même dossier que ce script
+                    3. **Créez** un fichier `.env` avec vos clés:
+                    
+                    ```bash
+                    # Exemple de fichier .env
+                    RUNPOD_ENDPOINT=https://api.runpod.ai/v2/votre-endpoint
+                    RUNPOD_TOKEN=votre-token-runpod
+                    OLLAMA_REMOTE_URL=http://votre-serveur:11434
+                    ANTHROPIC_API_KEY=sk-ant-votre-cle
+                    DEFAULT_CHUNK_SIZE=3000
+                    ```
+                    
+                    4. **Redémarrez** l'application
+                    """)
+            
             # ======= DOCUMENTS =======
             with gr.Tab("📄 Documents"):
                 with gr.Row():
@@ -814,11 +990,11 @@ def create_hybrid_interface():
                         # Configuration hybride
                         with gr.Group() as hybrid_config:
                             chunk_size = gr.Slider(
-                                1000, 5000, value=3000, step=500,
+                                1000, 5000, value=DEFAULT_CONFIG["chunk_size"], step=500,
                                 label="Taille chunks"
                             )
                             chunk_overlap = gr.Slider(
-                                0, 500, value=200, step=50,
+                                0, 500, value=DEFAULT_CONFIG["chunk_overlap"], step=50,
                                 label="Chevauchement"
                             )
                             
@@ -841,7 +1017,11 @@ def create_hybrid_interface():
                         
                         # Prompts prédéfinis
                         gr.Markdown("### Prompts")
-                        available_prompts = get_all_prompts_for_dropdown() if MODULES_AVAILABLE else ["Analyse juridique hybride"]
+                        if MODULES_AVAILABLE:
+                            available_prompts = get_all_prompts_for_dropdown()
+                        else:
+                            available_prompts = ["Analyse juridique par défaut"]
+                        
                         prompt_selector = gr.Dropdown(
                             choices=available_prompts,
                             label="Prompts prédéfinis"
@@ -850,7 +1030,11 @@ def create_hybrid_interface():
                         prompt_status = gr.Textbox(label="Statut", interactive=False)
                     
                     with gr.Column(scale=2):
-                        default_prompt = get_prompt_content("Analyse juridique hybride") if MODULES_AVAILABLE else DEFAULT_PROMPT_TEXT
+                        if MODULES_AVAILABLE:
+                            default_prompt = get_prompt_content("Analyse juridique hybride") or DEFAULT_PROMPT_TEXT
+                        else:
+                            default_prompt = "Tu es un expert juridique. Analyse ce document en détail."
+                        
                         prompt_text = gr.Textbox(
                             label="Prompt d'analyse",
                             lines=10,
@@ -999,9 +1183,10 @@ def create_hybrid_interface():
 # ========================================
 
 def build_ui():
-    """Point d'entrée pour main_ocr.py - utilise VOS modules."""
-    print("Construction interface hybride avec modules existants...")
+    """Point d'entrée pour main_ocr.py - utilise VOS modules + .env."""
+    print("Construction interface hybride avec modules existants + .env...")
     print(f"Modules disponibles: {MODULES_AVAILABLE}")
+    print(f"Gestion .env: {'Disponible' if ENV_AVAILABLE else 'Non disponible'}")
     
     if MODULES_AVAILABLE:
         print("✅ Utilisation de vos modules:")
@@ -1010,6 +1195,14 @@ def build_ui():
         print("  - prompt_manager.py")
         print("  - processing_pipeline.py")
         print("  - config.py")
+        
+        if ENV_AVAILABLE:
+            print("  - env_manager.py (nouveau)")
+            try:
+                config = get_api_config()
+                print(f"🔑 Config .env: Ollama={bool(config.get('ollama_url'))}, RunPod={bool(config.get('runpod_endpoint'))}")
+            except:
+                print("⚠️ Erreur lecture .env")
     else:
         print("⚠️ Certains modules manquants - Mode dégradé")
     
@@ -1020,6 +1213,43 @@ def build_ui():
 # ========================================
 
 if __name__ == "__main__":
-    print("Interface hybride - Test direct avec modules existants")
+    print("Interface hybride - Test direct avec modules existants + .env")
+    
+    # Afficher config .env si disponible
+    if ENV_AVAILABLE:
+        try:
+            print("\n" + "="*50)
+            print("CONFIGURATION .ENV")
+            print("="*50)
+            print(env_manager.status_report())
+            print("="*50 + "\n")
+        except Exception as e:
+            print(f"⚠️ Erreur .env: {e}")
+    
     demo = create_hybrid_interface()
-    demo.launch(server_port=7860)
+    
+    # Utiliser config .env pour lancement si disponible, avec port dynamique
+    if ENV_AVAILABLE:
+        try:
+            config = get_app_config()
+            print(f"🌐 Lancement: {config['host']}:{config.get('port', 'auto')}")
+            
+            # Si port spécifié dans .env, l'utiliser, sinon laisser Gradio choisir
+            if config.get('port'):
+                demo.launch(
+                    server_name=config["host"],
+                    server_port=config["port"],
+                    debug=config["debug"]
+                )
+            else:
+                # Port automatique
+                demo.launch(
+                    server_name=config["host"],
+                    debug=config["debug"]
+                )
+        except Exception as e:
+            print(f"⚠️ Erreur config .env: {e}, lancement automatique")
+            demo.launch()  # Port automatique
+    else:
+        print("🌐 Lancement avec port automatique")
+        demo.launch()  # Port automatique
