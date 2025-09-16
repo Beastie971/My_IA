@@ -16,6 +16,52 @@ import threading
 import time
 import requests
 
+
+def get_optimal_gpu_config(model_name: str, text_length: int) -> dict:
+    """Retourne une configuration GPU optimale selon le modèle et la taille du texte."""
+    
+    # Configuration de base pour forcer le GPU
+    base_config = {
+        "num_gpu": 50,  # Forcer l'utilisation GPU
+        "num_batch": 512,
+        "num_thread": 8,
+        "repeat_penalty": 1.1,
+        "top_p": 0.9
+    }
+    
+    # Ajustements selon le modèle
+    if "7b" in model_name.lower():
+        base_config.update({
+            "num_gpu": 50,  # Utilisation GPU maximale
+            "num_batch": 512,
+            "num_ctx": 8192 if text_length > 4000 else 4096
+        })
+    elif "13b" in model_name.lower():
+        base_config.update({
+            "num_gpu": 45,  # Légèrement moins pour modèles plus gros
+            "num_batch": 256,
+            "num_ctx": 4096
+        })
+    elif "mixtral" in model_name.lower() or "8x7b" in model_name.lower():
+        base_config.update({
+            "num_gpu": 40,  # Mixtral nécessite plus de VRAM
+            "num_batch": 256,
+            "num_ctx": 8192
+        })
+    elif "70b" in model_name.lower():
+        base_config.update({
+            "num_gpu": 30,  # Gros modèles
+            "num_batch": 128,
+            "num_ctx": 4096
+        })
+    
+    # Ajustements selon la taille du texte
+    if text_length > 8000:
+        base_config["num_ctx"] = min(base_config.get("num_ctx", 4096), 8192)
+        base_config["num_batch"] = max(base_config.get("num_batch", 256), 512)
+    
+    return base_config
+
 # ========================================
 # VARIABLES GLOBALES - INITIALISATION
 # ========================================
