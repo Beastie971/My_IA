@@ -1,0 +1,20 @@
+{
+  "name": "legal-summarizer-fr",
+  "image": "docker.io/copilotai/legal-summarizer-serverless:0.1.0",
+  "endpointType": "QUEUE",
+  "gpuTypes": ["NVIDIA RTX 3090", "NVIDIA L4", "NVIDIA RTX A5000"],
+  "minWorkers": 1,
+  "maxWorkers": 1,
+  "workerType": "ACTIVE",
+  "containerDiskInGb": 20,
+  "timeoutInSeconds": 600,
+  "env": {
+    "MODEL_ID": "mistralai/Mistral-7B-Instruct-v0.3",
+    "USE_4BIT": "1",
+    "HF_TOKEN": ""
+  },
+  "ports": [],
+  "volumeInGb": 0,
+  "networkVolumeMounts": []
+}
+

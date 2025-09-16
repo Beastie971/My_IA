@@ -1,0 +1,6 @@
+
+# dockerignore
+*.md
+*.tar.gz
+__pycache__/
+.DS_Store

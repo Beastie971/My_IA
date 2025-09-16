@@ -1,0 +1,284 @@
+# SUITE DES FONCTIONS CALLBACK
+    
+    def on_test_connection_fn(provider, ollama_url_val, runpod_endpoint, runpod_token):
+        result = test_connection(provider, ollama_url_val, runpod_endpoint, runpod_token)
+        try:
+            url_to_use = ollama_url_val if provider == "Ollama distant" and ollama_url_val else "http://localhost:11434"
+            import requests
+            response = requests.get(f"{url_to_use}/api/tags", timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                models = [model['name'] for model in data.get('models', [])]
+                if models:
+                    combined_result = f"{result} | {len(models)} modèles chargés"
+                    return (gr.update(choices=models, value=models[0]), gr.update(value=combined_result))
+            return gr.update(), gr.update(value=result)
+        except Exception as e:
+            return gr.update(), gr.update(value=f"{result} | Erreur: {str(e)}")
+
+    def on_provider_change_fn(provider):
+        ollama_visible = provider == "Ollama distant"
+        runpod_visible = provider == "RunPod.io"
+        test_btn_visible = True
+        save_url_visible = provider == "Ollama distant"
+        test_save_visible = provider == "Ollama distant"
+        
+        if ollama_visible:
+            current_ollama_url = load_ollama_config()
+        else:
+            current_ollama_url = ""
+        
+        status_message = ""
+        if provider == "Ollama local":
+            status_message = "Utilisation d'Ollama local sur http://localhost:11434"
+        elif provider == "Ollama distant":
+            status_message = f"URL Ollama distant: {current_ollama_url}"
+        elif provider == "RunPod.io":
+            status_message = "Configurez votre endpoint et token RunPod"
+        
+        return (
+            gr.update(visible=ollama_visible, value=current_ollama_url if ollama_visible else ""),
+            gr.update(visible=runpod_visible, value="" if runpod_visible else ""),
+            gr.update(visible=runpod_visible, value="" if runpod_visible else ""),
+            gr.update(visible=test_btn_visible),
+            gr.update(visible=save_url_visible),
+            gr.update(visible=test_save_visible),
+            gr.update(value=status_message)
+        )
+
+    def on_select_prompt_fn(name, store_dict):
+        try:
+            if name in store_dict:
+                text = store_dict.get(name, "")
+                return (
+                    gr.update(value=text),
+                    gr.update(value=f"**PROMPT SÉLECTIONNÉ :** `{name}` ({len(text)} caractères)")
+                )
+            else:
+                return (
+                    gr.update(value="Prompt non trouvé."),
+                    gr.update(value=f"**ERREUR :** Prompt `{name}` non trouvé !")
+                )
+        except Exception as e:
+            return (
+                gr.update(value="Erreur lors du chargement du prompt."),
+                gr.update(value=f"**ERREUR :** Exception lors du chargement de `{name}`")
+            )
+
+    def process_both_files_fn(file1, file2, nettoyer, anonymiser, force_processing, processing_mode):
+        if not file1 and not file2:
+            return ("Aucun fichier fourni", "", "", "", "", "", "", "", "", "", "")
+        
+        try:
+            results = {}
+            
+            def process_single_file(file_path, file_key):
+                if file_path:
+                    message, stats, preview, file_type, anon_report = process_file_to_text(
+                        file_path, nettoyer, anonymiser, force_processing
+                    )
+                    results[file_key] = (message, stats, preview, file_type, anon_report)
+                else:
+                    results[file_key] = ("Aucun fichier", "", "", "UNKNOWN", "")
+            
+            if file1:
+                process_single_file(file1, 'file1')
+            if file2:
+                process_single_file(file2, 'file2')
+            
+            r1 = results.get('file1', ("", "", "", "UNKNOWN", ""))
+            r2 = results.get('file2', ("", "", "", "UNKNOWN", ""))
+            
+            status_msg = []
+            if file1:
+                status_msg.append(f"Fichier 1: {r1[0]}")
+            if file2:
+                status_msg.append(f"Fichier 2: {r2[0]}")
+            combined_status = "\n".join(status_msg) if status_msg else "Aucun fichier traité"
+            
+            return (
+                combined_status, r1[1], r1[2], r1[4], r2[1], r2[2], r2[4],
+                r1[2], r2[2], file1 if file1 else "", file2 if file2 else ""
+            )
+            
+        except Exception as e:
+            error_msg = f"Erreur traitement : {str(e)}"
+            return (error_msg, "Erreur", "", "", "Erreur", "", "", "", "", "", "")
+
+    # =============================================================================
+    # CONSTRUCTION DE L'INTERFACE GRADIO - CORRECTION TOP_P
+    # =============================================================================
+    print("DEBUG: Création des Blocks v7.6-FINAL-FIXED...")
+    with gr.Blocks(title=f"{script_name} - VOS PROMPTS UNIQUEMENT v7.6-FINAL-FIXED") as demo:
+        print("DEBUG: Dans les Blocks v7.6-FINAL-FIXED")
+        gr.Markdown("## OCR + Analyse juridique avec VOS PROMPTS EXCLUSIVEMENT")
+        gr.Markdown("### Version 7.6-FINAL-FIXED - Toutes corrections + dropdown modèles VISIBLE + top_p fixé")
+        gr.Markdown(f"**Vos prompts :** `{PROMPT_STORE_PATH}` | **Nombre de prompts :** {len(user_prompt_names)}")
+
+        # =========================================================================
+        # SECTION 1: UPLOAD DES FICHIERS
+        # =========================================================================
+        gr.Markdown("---")
+        gr.Markdown("## Upload des fichiers")
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("**FICHIER 1**")
+                input_file1 = gr.File(
+                    label="Premier fichier (PDF ou TXT)", 
+                    file_types=[".pdf", ".txt", ".text"]
+                )
+            with gr.Column(scale=1):
+                gr.Markdown("**FICHIER 2 (optionnel)**")
+                input_file2 = gr.File(
+                    label="Deuxième fichier (PDF ou TXT) - optionnel", 
+                    file_types=[".pdf", ".txt", ".text"]
+                )
+
+        # Configuration commune
+        with gr.Row():
+            nettoyer = gr.Checkbox(label="Nettoyage avancé", value=True)
+            anonymiser = gr.Checkbox(label="Anonymisation automatique", value=False)
+            force_processing = gr.Checkbox(label="Forcer nouveau traitement", value=False)
+
+        # =========================================================================
+        # SECTION 2: CONFIGURATION DU FOURNISSEUR
+        # =========================================================================
+        gr.Markdown("---")
+        gr.Markdown("## Configuration du fournisseur de modèles")
+        
+        with gr.Row():
+            provider_choice = gr.Radio(
+                label="Fournisseur", 
+                choices=["Ollama local", "Ollama distant", "RunPod.io"], 
+                value="Ollama local"
+            )
+        
+        # Champs de configuration
+        with gr.Row():
+            with gr.Column():
+                ollama_url = gr.Textbox(
+                    label="URL Ollama distant", 
+                    value=saved_ollama_url,
+                    placeholder="ex: http://192.168.1.100:11434",
+                    interactive=True,
+                    visible=False
+                )
+                save_url_btn = gr.Button("Sauvegarder URL", variant="secondary", size="sm", visible=False)
+            with gr.Column():
+                runpod_endpoint = gr.Textbox(
+                    label="Endpoint RunPod", 
+                    placeholder="https://api.runpod.ai/v2/xxx/openai/v1",
+                    interactive=True,
+                    visible=False
+                )
+                runpod_token = gr.Textbox(
+                    label="Token RunPod", 
+                    placeholder="Token d'authentification",
+                    type="password",
+                    interactive=True,
+                    visible=False
+                )
+        
+        with gr.Row():
+            test_connection_btn = gr.Button("Tester la connexion", variant="secondary", size="sm", visible=True)
+            connection_status = gr.Markdown("Utilisation d'Ollama local sur http://localhost:11434", visible=True)
+
+        # =========================================================================
+        # ACTIONS PRINCIPALES
+        # =========================================================================
+        gr.Markdown("---")
+        gr.Markdown("## Actions principales")
+        with gr.Row():
+            process_files_btn = gr.Button("Traiter les fichiers", variant="secondary", size="lg")
+
+        # =========================================================================
+        # INTERFACE PRINCIPALE AVEC ONGLETS
+        # =========================================================================
+        gr.Markdown("---")
+        
+        with gr.Tabs():
+            # ONGLET 1: RÉSULTATS
+            with gr.Tab("RÉSULTATS", elem_id="results_tab"):
+                gr.Markdown("## **RÉSULTAT DE VOTRE PROMPT EXCLUSIVEMENT**")
+                
+                unified_analysis_box = gr.Textbox(
+                    label="Résultat généré par VOTRE prompt UNIQUEMENT", 
+                    lines=45,
+                    show_copy_button=True,
+                    placeholder="Le résultat de votre prompt personnel apparaîtra ici après analyse...",
+                    container=True,
+                    show_label=True
+                )
+                
+                # Actions rapides dans l'onglet résultats
+                with gr.Row():
+                    analyze_files_btn = gr.Button("Analyser avec MON PROMPT", variant="primary", size="lg")
+                    full_pipeline_btn = gr.Button("TRAITEMENT COMPLET", variant="primary", size="lg")
+            
+            # ONGLET 2: CONFIGURATION & DEBUG
+            with gr.Tab("CONFIGURATION & DEBUG", elem_id="config_tab"):
+                gr.Markdown("## Configuration et debug")
+                
+                # Sous-onglets pour organiser la configuration
+                with gr.Tabs():
+                    # Sous-onglet: VOS PROMPTS
+                    with gr.Tab("VOS PROMPTS"):
+                        gr.Markdown("### VOS PROMPTS PERSONNELS")
+
+                        with gr.Row():
+                            prompt_selector = gr.Dropdown(
+                                label="Vos prompts personnels", 
+                                choices=user_prompt_names, 
+                                value=selected_prompt,
+                                info="Sélectionnez le prompt que vous voulez appliquer"
+                            )
+
+                        selected_prompt_info = gr.Markdown(
+                            f"**PROMPT SÉLECTIONNÉ :** `{selected_prompt}` ({len(default_prompt_content)} caractères)",
+                            visible=True
+                        )
+
+                        prompt_box = gr.Textbox(
+                            label="Contenu de votre prompt sélectionné",
+                            value=default_prompt_content,
+                            lines=12,
+                            interactive=True,
+                            info="ATTENTION : Ce contenu DOIT correspondre au prompt sélectionné ci-dessus !",
+                            show_copy_button=True
+                        )
+
+                        sync_prompt_btn = gr.Button(
+                            "RECHARGER le prompt sélectionné", 
+                            variant="secondary", 
+                            size="sm"
+                        )
+                    
+                    # Sous-onglet: PARAMÈTRES MODÈLE - CORRECTION TOP_P
+                    with gr.Tab("PARAMÈTRES"):
+                        gr.Markdown("### Configuration du modèle et paramètres")
+                        
+                        # Sélection du modèle
+                        gr.Markdown("#### Sélection du modèle IA")
+                        
+                        # Déterminer le modèle par défaut
+                        if "mistral:7b-instruct" in models_list:
+                            default_model = "mistral:7b-instruct"
+                        elif "deepseek-coder:latest" in models_list:
+                            default_model = "deepseek-coder:latest"
+                        elif "mistral:latest" in models_list:
+                            default_model = "mistral:latest"
+                        else:
+                            default_model = models_list[0] if models_list else "mistral:latest"
+                        
+                        # Dropdown modèles SÉPARÉ et VISIBLE
+                        with gr.Row():
+                            with gr.Column(scale=3):
+                                modele = gr.Dropdown(
+                                    label="Modèle IA disponible", 
+                                    choices=models_list, 
+                                    value=default_model,
+                                    info="Sélectionnez le modèle pour l'analyse",
+                                    interactive=True,
+                                    visible=True
+                                )

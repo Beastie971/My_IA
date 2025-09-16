@@ -1,0 +1,201 @@
+with gr.Column(scale=1):
+                                refresh_models_btn = gr.Button(
+                                    "Actualiser", 
+                                    variant="secondary", 
+                                    size="sm"
+                                )
+                            with gr.Column(scale=1):
+                                force_refresh_btn = gr.Button(
+                                    "Force MAJ", 
+                                    variant="secondary", 
+                                    size="sm"
+                                )
+                        
+                        # Affichage debug des modèles disponibles
+                        with gr.Row():
+                            models_debug = gr.Textbox(
+                                label="Modèles détectés au démarrage", 
+                                value=f"Modèles trouvés: {', '.join(models_list) if models_list else 'Aucun'} (Total: {len(models_list)})",
+                                interactive=False,
+                                lines=1
+                            )
+                        
+                        # SÉPARATEUR VISUEL
+                        gr.Markdown("---")
+                        gr.Markdown("#### Paramètres de génération")
+                        
+                        # Paramètres de génération
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                profil = gr.Radio(
+                                    label="Profil de vitesse", 
+                                    choices=["Rapide", "Confort", "Maxi"], 
+                                    value="Confort"
+                                )
+                            with gr.Column(scale=1):
+                                max_tokens_out = gr.Slider(
+                                    label="Longueur max de réponse (tokens)", 
+                                    minimum=256, 
+                                    maximum=8192,
+                                    step=256, 
+                                    value=4096,
+                                    visible=True,
+                                    interactive=True
+                                )
+                        
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                mode_analysis = gr.Radio(
+                                    label="Mode d'analyse", 
+                                    choices=["Standard", "Expert"], 
+                                    value="Standard"
+                                )
+                            with gr.Column(scale=1):
+                                temperature = gr.Slider(
+                                    label="Créativité (température)", 
+                                    minimum=0.0, 
+                                    maximum=2.0, 
+                                    step=0.1, 
+                                    value=0.1
+                                )
+                                # CORRECTION PRINCIPALE: Ajout du slider top_p manquant
+                                top_p = gr.Slider(
+                                    label="Top-p (diversité)", 
+                                    minimum=0.0, 
+                                    maximum=1.0, 
+                                    step=0.05, 
+                                    value=0.9,
+                                    info="Contrôle la diversité des réponses"
+                                )
+                                processing_mode = gr.Radio(
+                                    label="Mode de traitement", 
+                                    choices=["Parallèle", "Séquentiel"], 
+                                    value="Parallèle"
+                                )
+                    
+                    # Sous-onglet: DEBUG
+                    with gr.Tab("DEBUG"):
+                        gr.Markdown("### DEBUG - VÉRIFICATION DU PROMPT ENVOYÉ")
+                        
+                        debug_prompt_box = gr.Textbox(
+                            label="PROMPT EXACT ENVOYÉ À L'IA", 
+                            lines=15, 
+                            show_copy_button=True,
+                            placeholder="Le prompt exact envoyé à l'IA apparaîtra ici pour vérification...",
+                            interactive=False
+                        )
+                        
+                        # Informations techniques simplifiées
+                        with gr.Tabs():
+                            with gr.Tab("Textes sources"):
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        text1_stats = gr.Textbox(label="Stats fichier 1", lines=1, interactive=False)
+                                        preview1_box = gr.Textbox(label="Texte fichier 1", interactive=False, lines=8)
+                                    with gr.Column(scale=1):
+                                        text2_stats = gr.Textbox(label="Stats fichier 2", lines=1, interactive=False)
+                                        preview2_box = gr.Textbox(label="Texte fichier 2", interactive=False, lines=8)
+                            
+                            with gr.Tab("Anonymisation"):
+                                with gr.Row():
+                                    with gr.Column(scale=1):
+                                        anonymization1_report = gr.Textbox(label="Anonymisation fichier 1", interactive=False, lines=6)
+                                    with gr.Column(scale=1):
+                                        anonymization2_report = gr.Textbox(label="Anonymisation fichier 2", interactive=False, lines=6)
+
+        # États pour stocker les textes
+        current_text1 = gr.State(value="")
+        current_text2 = gr.State(value="")
+        current_file_path1 = gr.State(value="")
+        current_file_path2 = gr.State(value="")
+
+        # =============================================================================
+        # CONNEXIONS DES ÉVÉNEMENTS v7.6 - FINAL FIXED AVEC TOP_P
+        # =============================================================================
+
+        # Changement de fournisseur
+        provider_choice.change(
+            fn=on_provider_change_fn,
+            inputs=[provider_choice],
+            outputs=[ollama_url, runpod_endpoint, runpod_token, test_connection_btn, save_url_btn, save_url_btn, connection_status]
+        )
+
+        # Test de connexion avec mise à jour modèles
+        test_connection_btn.click(
+            fn=on_test_connection_fn,
+            inputs=[provider_choice, ollama_url, runpod_endpoint, runpod_token],
+            outputs=[modele, connection_status]
+        )
+
+        # Sélection de prompt utilisateur
+        prompt_selector.change(
+            fn=on_select_prompt_fn,
+            inputs=[prompt_selector, gr.State(value=store)],
+            outputs=[prompt_box, selected_prompt_info]
+        )
+
+        # Boutons principaux - CORRECTION: top_p maintenant inclus dans les inputs
+        analyze_files_btn.click(
+            fn=analyze_both_files_fn,
+            inputs=[current_text1, current_text2, current_file_path1, current_file_path2,
+                   modele, profil, max_tokens_out, prompt_box, mode_analysis, temperature, top_p,
+                   nettoyer, anonymiser, processing_mode, provider_choice, ollama_url, 
+                   runpod_endpoint, runpod_token],
+            outputs=[unified_analysis_box, text1_stats, preview1_box,
+                    anonymization1_report, text2_stats, preview2_box, anonymization2_report,
+                    current_text1, current_text2, current_file_path1, current_file_path2, debug_prompt_box]
+        )
+
+        full_pipeline_btn.click(
+            fn=analyze_both_files_fn,  # Même fonction pour simplifier
+            inputs=[current_text1, current_text2, current_file_path1, current_file_path2,
+                   modele, profil, max_tokens_out, prompt_box, mode_analysis, temperature, top_p,
+                   nettoyer, anonymiser, processing_mode, provider_choice, ollama_url, 
+                   runpod_endpoint, runpod_token],
+            outputs=[unified_analysis_box, text1_stats, preview1_box,
+                    anonymization1_report, text2_stats, preview2_box, anonymization2_report,
+                    current_text1, current_text2, current_file_path1, current_file_path2, debug_prompt_box]
+        )
+
+        process_files_btn.click(
+            fn=process_both_files_fn,
+            inputs=[input_file1, input_file2, nettoyer, anonymiser, force_processing, processing_mode],
+            outputs=[unified_analysis_box, text1_stats, preview1_box, 
+                    anonymization1_report, text2_stats, preview2_box, anonymization2_report,
+                    current_text1, current_text2, current_file_path1, current_file_path2]
+        )
+
+        # Documentation finale
+        gr.Markdown("""
+        ---
+        ## Version v7.6-FINAL-FIXED - Script complet et fonctionnel
+        
+        **CORRECTIONS APPLIQUÉES :**
+        - ✅ Prompt respecté par appel direct à l'IA
+        - ✅ Interface organisée en onglets
+        - ✅ Dropdown modèles visible dans l'onglet PARAMÈTRES
+        - ✅ Boutons de test et diagnostic fonctionnels
+        - ✅ Variable top_p ajoutée et configurée (CORRECTION PRINCIPALE)
+        - ✅ Erreur de syntaxe corrigée
+        
+        **UTILISATION :**
+        1. Uploadez vos fichiers
+        2. Configurez le modèle dans l'onglet CONFIGURATION
+        3. Sélectionnez votre prompt personnel
+        4. Lancez l'analyse
+        
+        Le script respecte maintenant exactement vos prompts sans ajout d'instructions.
+        """)
+    
+    print("DEBUG: demo créé v7.6-FINAL-FIXED")
+    return demo
+
+# =============================================================================
+# POINT D'ENTRÉE PRINCIPAL
+# =============================================================================
+
+if __name__ == "__main__":
+    print("Lancement de l'interface Gradio v7.6-FINAL-FIXED")
+    print("Toutes corrections appliquées - Script complet + top_p fixé")
+    demo = build_ui()
+    demo.launch()

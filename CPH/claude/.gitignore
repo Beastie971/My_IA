@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Cache et données temporaires
+cache/
+*.log
+*.tmp
+temp/
+
+# Configuration locale
+config/local_*
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Prompts personnalisés (optionnel - à décommenter si privé)
+# prompts/custom_prompts.json
+
+# Modèles et données
+models/
+data/
+*.pdf
+*.docx

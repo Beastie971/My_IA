@@ -1,0 +1,22 @@
+--- gradio_interface.py
++++ gradio_interface.py
+@@ -1 +1 @@
+-                              prompt_text, mode_analysis, temperature, nettoyer, anonymiser, processing_mode,
++                              prompt_text, mode_analysis, temperature, top_p, nettoyer, anonymiser, processing_mode,
+@@ -1 +1,2 @@
+                         "temperature": temperature,
++                        "top_p": top_p,
+@@ -1,2 +1,10 @@
+                                 )
++                            with gr.Column(scale=1):
++                                top_p = gr.Slider(
++                                    label="Top-p (nucleus sampling)", 
++                                    minimum=0.1, 
++                                    maximum=1.0, 
++                                    step=0.05, 
++                                    value=0.9,
++                                    info="Plus bas = plus déterministe"
++                                )
+@@ -1 +1 @@
+-                   modele, profil, max_tokens_out, prompt_box, mode_analysis, temperature,
++                   modele, profil, max_tokens_out, prompt_box, mode_analysis, temperature, top_p,
