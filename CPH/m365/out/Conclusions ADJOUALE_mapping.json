@@ -1,0 +1,45 @@
+{
+  "created_at": "2025-09-17T07:01:08.669650Z",
+  "source_file": "Conclusions ADJOUALE.pdf",
+  "searchable_source": null,
+  "doc_sha256": "6c053029be45500588ccd4270b4d399dfbff1974e2383f4b92b00026688c241a",
+  "placeholders": {},
+  "counters": {
+    "email": 0,
+    "phone_fr": 0,
+    "iban_fr": 0,
+    "siren": 0,
+    "siret": 0,
+    "amount_eur": 0,
+    "dates": 0,
+    "person_names": 0,
+    "company_names": 0,
+    "addresses_fr": 0,
+    "postal_code_fr": 0,
+    "custom": 0
+  },
+  "config": {
+    "categories": {
+      "email": true,
+      "phone_fr": true,
+      "iban_fr": true,
+      "siren": true,
+      "siret": true,
+      "amount_eur": true,
+      "dates": true,
+      "person_names": true,
+      "company_names": true,
+      "addresses_fr": true
+    },
+    "custom_entities": [],
+    "output": {
+      "emit_original_text": true
+    },
+    "ocr": {
+      "enable": true,
+      "languages": "fra",
+      "min_avg_chars_per_page": 15,
+      "force_ocr": false
+    }
+  }
+}

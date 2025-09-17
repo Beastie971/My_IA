@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
 import re
 import json
-import fitz
-import hashlib
+import fitz  # PyMuPDF
 import logging
 import tempfile
 import shutil
@@ -13,7 +11,7 @@ import subprocess
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any, Optional
 
 import gradio as gr
 
@@ -108,6 +106,7 @@ class AnonymizerConfig:
         return AnonymizerConfig(**merged)
 
 def compute_file_hash(path: Path) -> str:
+    import hashlib
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
@@ -163,6 +162,7 @@ class Anonymizer:
             for m in pat.finditer(text):
                 s, e = m.span()
                 cands.append((s, e, text[s:e], "custom"))
+        # Résolution chevauchements: garder les plus longs
         cands.sort(key=lambda x: (x[0], -(x[1]-x[0])))
         resolved, last_end = [], -1
         for s, e, o, t in cands:
@@ -190,6 +190,37 @@ class Anonymizer:
             last = e
         out.append(text[last:])
         return "".join(out), pairs
+
+# -------------------------
+# Helpers Gradio: chemins de fichiers
+# -------------------------
+
+def get_path(file_obj: Any) -> Optional[str]:
+    """
+    Rend un chemin exploitable depuis un File Gradio, compatible v3/v4:
+    - objet avec .name
+    - dict avec 'name' ou 'path'
+    - str direct
+    - liste (on prend le 1er)
+    """
+    if not file_obj:
+        return None
+    f = file_obj
+    if isinstance(f, list):
+        if not f:
+            return None
+        f = f[0]
+    if isinstance(f, str):
+        return f
+    if hasattr(f, "name"):
+        return f.name
+    if isinstance(f, dict):
+        return f.get("name") or f.get("path")
+    return None
+
+# -------------------------
+# OCR conditionnel
+# -------------------------
 
 def run_ocr_if_needed(input_pdf: Path, cfg: AnonymizerConfig, workdir: Path, log: List[str]) -> Path:
     try:
@@ -232,6 +263,10 @@ def run_ocr_if_needed(input_pdf: Path, cfg: AnonymizerConfig, workdir: Path, log
         log.append(f"OCR non nécessaire (moyenne {avg:.1f} char/page).")
         return input_pdf
 
+# -------------------------
+# Pipeline anonymisation
+# -------------------------
+
 def anonymize_pdf_gradio(input_pdf_path: str, cfg_dict: dict, outdir: Path) -> Dict[str, str]:
     log = []
     cfg = AnonymizerConfig.from_dict(cfg_dict)
@@ -255,13 +290,13 @@ def anonymize_pdf_gradio(input_pdf_path: str, cfg_dict: dict, outdir: Path) -> D
             all_original_text.append(t)
             anon_t, pairs = anonymizer.anonymize_text(t)
             all_anonymized_text.append(anon_t)
-            originals = {}
+            originals: Dict[str, List[str]] = {}
             for original, placeholder in pairs:
                 originals.setdefault(original, []).append(placeholder)
             per_page_originals.append(originals)
         doc.close()
 
-        # Redactions (patch: pas de page.has_redactions())
+        # Redactions (compatibilité versions PyMuPDF: pas de page.has_redactions())
         redacted_doc = fitz.open(searchable)
         redacted_count = 0
         for idx, page in enumerate(redacted_doc):
@@ -304,15 +339,16 @@ def anonymize_pdf_gradio(input_pdf_path: str, cfg_dict: dict, outdir: Path) -> D
         with open(used_config, "w", encoding="utf-8") as f:
             json.dump(asdict(cfg), f, ensure_ascii=False, indent=2)
 
-        original_txt = None
+        original_txt = ""
         if cfg.output.get("emit_original_text", True):
-            original_txt = out("original_text.txt")
-            with open(original_txt, "w", encoding="utf-8") as f:
+            original_txt_path = out("original_text.txt")
+            with open(original_txt_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(all_original_text))
+            original_txt = str(original_txt_path)
 
-        # Aperçu replacements
+        # Aperçu remplacements
         preview_lines = []
-        for k, v in list(anonymizer.mapping.items())[:20]:
+        for k, v in list(mapping_payload["placeholders"].items())[:20]:
             preview_lines.append(f"- `{k}` → **{v['placeholder']}** ({v['type']})")
         preview = "Aperçu des 20 premiers remplacements :\n" + ("\n".join(preview_lines) if preview_lines else "_Aucun motif détecté._")
 
@@ -321,7 +357,7 @@ def anonymize_pdf_gradio(input_pdf_path: str, cfg_dict: dict, outdir: Path) -> D
             "anonymized_txt": str(anonymized_txt),
             "mapping_json": str(mapping_json),
             "used_config": str(used_config),
-            "original_txt": str(original_txt) if original_txt else "",
+            "original_txt": original_txt,
             "log": "\n".join(log),
             "preview": preview
         }
@@ -330,6 +366,10 @@ def anonymize_pdf_gradio(input_pdf_path: str, cfg_dict: dict, outdir: Path) -> D
             shutil.rmtree(workdir, ignore_errors=True)
         except Exception:
             pass
+
+# -------------------------
+# Pipeline désanonymisation (texte)
+# -------------------------
 
 def deanonymize_file_gradio(input_path: str, mapping_path: str, outdir: Path) -> Dict[str, str]:
     log = []
@@ -360,7 +400,7 @@ def deanonymize_file_gradio(input_path: str, mapping_path: str, outdir: Path) ->
     with open(mapping_p, "r", encoding="utf-8") as f:
         mapping_payload = json.load(f)
 
-    inv = {}
+    inv: Dict[str, str] = {}
     for original, info in mapping_payload.get("placeholders", {}).items():
         ph = info["placeholder"]
         if ph not in inv:
@@ -386,12 +426,13 @@ def deanonymize_file_gradio(input_path: str, mapping_path: str, outdir: Path) ->
 # =========================
 
 def default_cfg_dict():
+    # deep copy via json
     return json.loads(json.dumps(DEFAULT_CONFIG))
 
 def build_ui():
     with gr.Blocks(title="Anonymiseur PDF avec OCR & Désanonymisation", theme="soft") as demo:
         gr.Markdown("## 🛡️ Anonymiseur PDF (OCR auto si besoin) + Désanonymisation\n"
-                    "Confidentialité: tout se passe **localement**. Aucun envoi de données.")
+                    "Confidentialité : tout se passe **localement**. Aucun envoi de données.")
 
         with gr.Row():
             mode = gr.Radio(choices=["Anonymiser", "Désanonymiser"], value="Anonymiser", label="Mode")
@@ -414,7 +455,7 @@ def build_ui():
                 person_names = gr.Checkbox(True, label="Noms (heuristique)")
                 company_names = gr.Checkbox(True, label="Dénominations sociales")
                 addresses_fr = gr.Checkbox(True, label="Adresses FR")
-            custom_entities = gr.Textbox(lines=3, label="Entités personnalisées (une par ligne, regex possible entre /.../)", placeholder="CCI Occitanie\n/\\bNomDeFamille\\b/")
+            custom_entities = gr.Textbox(lines=3, label="Entités personnalisées (une par ligne, regex entre /.../ possible)", placeholder="CCI Occitanie\n/\\bNomDeFamille\\b/")
             emit_original_text = gr.Checkbox(True, label="Écrire aussi le texte original (fichier séparé)")
             with gr.Row():
                 ocr_enable = gr.Checkbox(True, label="Activer OCR auto")
@@ -446,6 +487,7 @@ def build_ui():
             with gr.Tab("Journal"):
                 log_box = gr.Textbox(label="Logs", lines=18)
 
+        # Collecte de config depuis l'UI
         def collect_cfg(email, phone_fr, iban_fr, siren, siret, amount_eur, dates, person_names,
                         company_names, addresses_fr, custom_entities, emit_original_text,
                         ocr_enable, ocr_lang, ocr_min_chars, ocr_force):
@@ -477,12 +519,13 @@ def build_ui():
             }
             return cfg
 
+        # Changement de mode
         def on_mode_change(m):
             if m == "Anonymiser":
                 return (
-                    gr.update(visible=True),
-                    gr.update(visible=False),
-                    gr.update(visible=False)
+                    gr.update(visible=True),   # input_pdf
+                    gr.update(visible=False),  # input_for_dean
+                    gr.update(visible=False)   # mapping_in
                 )
             else:
                 return (
@@ -490,30 +533,40 @@ def build_ui():
                     gr.update(visible=True),
                     gr.update(visible=True)
                 )
-
         mode.change(on_mode_change, inputs=mode, outputs=[input_pdf, input_for_dean, mapping_in])
 
+        # Exécution principale
         def do_run(mode_val, input_pdf_f, input_for_dean_f, mapping_f,
                    email, phone_fr, iban_fr, siren, siret, amount_eur, dates, person_names,
                    company_names, addresses_fr, custom_entities, emit_original_text,
                    ocr_enable, ocr_lang, ocr_min_chars, ocr_force, outdir_text):
-            empty = [None, None, None, None, None, "", None, ""]
+
+            # Valeurs vides par défaut (8 outputs)
+            empty = (None, None, None, None, None, "", None, "")
+
             try:
                 outdir = Path(outdir_text or "out")
+                outdir.mkdir(parents=True, exist_ok=True)
+
                 if mode_val == "Anonymiser":
-                    if not input_pdf_f:
-                        return (*empty[:-1], "Veuillez fournir un PDF.",)
+                    ipath = get_path(input_pdf_f)
+                    if not ipath:
+                        return (*empty[:-1], "Veuillez fournir un PDF à anonymiser.")
                     cfg = collect_cfg(email, phone_fr, iban_fr, siren, siret, amount_eur, dates, person_names,
                                       company_names, addresses_fr, custom_entities, emit_original_text,
                                       ocr_enable, ocr_lang, ocr_min_chars, ocr_force)
-                    res = anonymize_pdf_gradio(input_pdf_f.name, cfg, outdir)
+                    res = anonymize_pdf_gradio(ipath, cfg, outdir)
                     return (res["redacted_pdf"], res["anonymized_txt"], res["mapping_json"],
                             res["used_config"], (res["original_txt"] or None), res["preview"], None, res["log"])
+
                 else:
-                    if not input_for_dean_f or not mapping_f:
-                        return (*empty[:-1], "Veuillez fournir le fichier anonymisé et le mapping.json.",)
-                    res = deanonymize_file_gradio(input_for_dean_f.name, mapping_f.name, outdir)
+                    src_path = get_path(input_for_dean_f)
+                    map_path = get_path(mapping_f)
+                    if not src_path or not map_path:
+                        return (*empty[:-1], "Veuillez fournir le fichier anonymisé (TXT ou PDF) **et** le mapping.json.")
+                    res = deanonymize_file_gradio(src_path, map_path, outdir)
                     return (None, None, None, None, None, "", res["deanonymized_txt"], res["log"])
+
             except Exception as e:
                 return (*empty[:-1], f"Erreur: {e}")
 
@@ -523,9 +576,10 @@ def build_ui():
                     email, phone_fr, iban_fr, siren, siret, amount_eur, dates, person_names,
                     company_names, addresses_fr, custom_entities, emit_original_text,
                     ocr_enable, ocr_lang, ocr_min_chars, ocr_force, outdir_box],
-            outputs=[redacted_pdf, anonymized_tx t := anonymized_txt, mapping_json, used_config, original_txt, preview_md, deanonymized_txt, log_box],
+            outputs=[redacted_pdf, anonymized_txt, mapping_json, used_config, original_txt, preview_md, deanonymized_txt, log_box],
         )
 
+        # Nettoyage des sorties affichées (UI)
         def clear_outputs():
             return (None, None, None, None, None, "", None, "")
         clear_btn.click(clear_outputs, inputs=None, outputs=[redacted_pdf, anonymized_txt, mapping_json, used_config, original_txt, preview_md, deanonymized_txt, log_box])
@@ -537,7 +591,8 @@ def build_ui():
             cfg = collect_cfg(email, phone_fr, iban_fr, siren, siret, amount_eur, dates, person_names,
                               company_names, addresses_fr, custom_entities, emit_original_text,
                               ocr_enable, ocr_lang, ocr_min_chars, ocr_force)
-            tmp = Path(tempfile.mkdtemp(prefix="prefs_")) / "preferences.json"
+            tmp_dir = Path(tempfile.mkdtemp(prefix="prefs_"))
+            tmp = tmp_dir / "preferences.json"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
             return str(tmp)
@@ -552,10 +607,14 @@ def build_ui():
 
         def load_prefs(file_obj):
             if not file_obj:
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-            with open(file_obj.name, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            cfg = AnonymizerConfig.from_dict(cfg)
+                # renvoyer des updates vides pour ne rien casser
+                return (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                        gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                        gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+            fpath = get_path(file_obj)
+            with open(fpath, "r", encoding="utf-8") as f:
+                cfg_json = json.load(f)
+            cfg = AnonymizerConfig.from_dict(cfg_json)
             ce = "\n".join(cfg.custom_entities or [])
             return (cfg.categories.get("email", True),
                     cfg.categories.get("phone_fr", True),

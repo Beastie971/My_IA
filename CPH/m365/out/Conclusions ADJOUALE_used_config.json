@@ -1,0 +1,24 @@
+{
+  "categories": {
+    "email": true,
+    "phone_fr": true,
+    "iban_fr": true,
+    "siren": true,
+    "siret": true,
+    "amount_eur": true,
+    "dates": true,
+    "person_names": true,
+    "company_names": true,
+    "addresses_fr": true
+  },
+  "custom_entities": [],
+  "output": {
+    "emit_original_text": true
+  },
+  "ocr": {
+    "enable": true,
+    "languages": "fra",
+    "min_avg_chars_per_page": 15,
+    "force_ocr": false
+  }
+}
