@@ -3,8 +3,8 @@
 
 """
 Gestionnaire de cache pour OCR
-Version: 1.0
-Date: 2025-09-15
+Version: 1.1 - CORRIGÉ avec get_pdf_hash
+Date: 2025-09-17
 """
 
 import os
@@ -20,7 +20,8 @@ def get_pdf_hash(file_path: str) -> Optional[str]:
         with open(file_path, 'rb') as f:
             content = f.read()
             return hashlib.md5(content).hexdigest()
-    except Exception:
+    except Exception as e:
+        print(f"Erreur calcul hash: {e}")
         return None
 
 def load_ocr_cache(pdf_hash: str, cleaned: bool) -> Optional[Dict[str, Any]]:

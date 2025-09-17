@@ -454,3 +454,28 @@ def example_hybrid_usage():
 
 if __name__ == "__main__":
     example_hybrid_usage()
+
+# ========================================
+# CONSTANTES POUR L'INTERFACE GRADIO
+# ========================================
+
+# Domaines juridiques supportés
+SUPPORTED_DOMAINS = {
+    "Aucun": "Aucun domaine spécifique",
+    "Droit du travail": "Spécialisation droit du travail",
+    "Droit commercial": "Spécialisation droit commercial", 
+    "Droit civil": "Spécialisation droit civil",
+    "Droit pénal": "Spécialisation droit pénal",
+    "Droit administratif": "Spécialisation droit administratif"
+}
+
+# Types de synthèse disponibles
+SYNTHESIS_TYPES = {
+    "synthese_executive": "Synthèse exécutive",
+    "synthese_narrative": "Synthèse narrative complète",
+    "synthese_technique": "Synthèse technique détaillée",
+    "synthese_comparative": "Synthèse comparative",
+    "synthese_procedurale": "Synthèse procédurale"
+}
+
+print("✅ Constantes SUPPORTED_DOMAINS et SYNTHESIS_TYPES chargées")

@@ -2,29 +2,29 @@
 # -*- coding: utf-8 -*-
 
 """
-API Ollama et RunPod pour OCR Juridique v7.3-TIMEOUT-FIXED
-Version: 7.3-TIMEOUT-FIXED - Correction timeout 524 Cloudflare
-Date: 2025-09-15
+API Ollama et RunPod pour OCR Juridique v7.2-SYSTEM-PROMPT-FIXED
+Version: 7.2-SYSTEM-PROMPT-FIXED - Assure la bonne séparation système/utilisateur
+Date: 2025-01-04
 """
 
 import json
 import requests
 import gradio as gr
-import time
 
 # =============================================================================
-# API OLLAMA/RUNPOD AVEC TIMEOUT CLOUDFLARE FIXÉ
+# API OLLAMA/RUNPOD AVEC SÉPARATION SYSTÈME/UTILISATEUR CLAIRE
 # =============================================================================
 
 def generate_with_ollama(model: str, system_prompt: str, user_text: str,
                          num_ctx: int, num_predict: int, temperature: float = 0.2,
-                         timeout: int = 85, ollama_url: str = "http://localhost:11434") -> str:
-    """Génère une réponse avec Ollama - Version avec timeout Cloudflare compatible."""
+                         timeout: int = 900, ollama_url: str = "http://localhost:11434") -> str:
+    """Génère une réponse avec Ollama - Version avec séparation système/utilisateur et GPU optimisé."""
+    # Calculer un timeout intelligent si non spécifié
+    if timeout is None:
+        timeout = calculate_smart_timeout(len(user_text), model)
+        print(f"Timeout calculé automatiquement : {timeout}s")
     
-    # Timeout sécurisé pour Cloudflare (85s max)
-    safe_timeout = min(timeout, 85)
-    
-    url = f"{ollama_url}/api/generate"
+    url = f"{ollama_url}/api/chat"
     
     # SÉPARATION CLAIRE : prompt système vs texte utilisateur
     payload = {
@@ -37,27 +37,28 @@ def generate_with_ollama(model: str, system_prompt: str, user_text: str,
             "temperature": temperature,
             "top_p": 0.9,
             "num_predict": num_predict,
-            "num_gpu": 50,
-            "num_batch": 512,
-            "num_thread": 8,
-            "repeat_penalty": 1.1
+            "num_gpu": -1,  # 🔥 FORCE UTILISATION DE TOUS LES GPUs DISPONIBLES
+            "num_batch": 512,  # Augmenter la taille de batch
+            "num_thread": 8,  # Parallélisation CPU
+            "repeat_penalty": 1.1,
+            "num_ctx": num_ctx,
+            "use_mmap": True,  # Optimisation mémoire
+            "use_mlock": True,  # Verrouillage mémoire pour éviter le swap
+            "low_vram": False  # 🔥 MODE HAUTE PERFORMANCE GPU
         },
-        "stream": False
+       "stream": False
     }
     
     print(f"🤖 Ollama - Prompt système : {len(system_prompt)} caractères")
     print(f"📄 Ollama - Texte utilisateur : {len(user_text)} caractères")
-    print(f"⏱️ Timeout sécurisé : {safe_timeout}s (Cloudflare compatible)")
-    
-    start_time = time.time()
+    print(f"🔥 GPU forcé avec tous les GPUs disponibles (num_gpu=-1)")
     
     try:
-        response = requests.post(url, json=payload, stream=True, timeout=safe_timeout)
+        response = requests.post(url, json=payload, timeout=timeout)
     except requests.exceptions.ConnectionError:
         return f"❌ Erreur : Impossible de se connecter à Ollama ({ollama_url}). Vérifiez qu'Ollama est démarré (ollama serve)."
     except requests.exceptions.Timeout:
-        elapsed = time.time() - start_time
-        return f"❌ Erreur : Délai dépassé ({elapsed:.1f}s/{safe_timeout}s). Réduisez la taille du texte ou utilisez le mode chunking."
+        return f"❌ Erreur : Délai dépassé ({timeout}s)."
     except Exception as e:
         return f"❌ Erreur de connexion Ollama : {e}"
     
@@ -72,50 +73,32 @@ def generate_with_ollama(model: str, system_prompt: str, user_text: str,
                    f"Erreur complète : {error_text}"
         return f"❌ Erreur HTTP {response.status_code} : {error_text}"
 
-    parts = []
     try:
-        for line in response.iter_lines():
-            if not line:
-                continue
-            try:
-                obj = json.loads(line.decode("utf-8"))
-                if obj.get("response"):
-                    parts.append(obj["response"])
-                if obj.get("error"):
-                    return f"❌ Erreur Ollama : {obj['error']}"
-                
-                # Vérification timeout pendant le streaming
-                if time.time() - start_time > safe_timeout - 5:  # Marge de sécurité
-                    print(f"⚠️ Approche du timeout, arrêt anticipé")
-                    break
-                    
-            except json.JSONDecodeError:
-                continue
+        data = response.json()
+        if "message" in data and "content" in data["message"]:
+            return data["message"]["content"]
+        elif "error" in data:
+            return f"❌ Erreur Ollama : {data['error']}"
+        else:
+            return f"❌ Réponse inattendue : {data}"
+    except json.JSONDecodeError:
+        return f"❌ Erreur de décodage JSON : {response.text[:500]}"
     except Exception as e:
-        return f"❌ Erreur lors de la lecture du flux : {e}"
-    
-    result = "".join(parts).strip()
-    elapsed = time.time() - start_time
-    print(f"✅ Génération terminée en {elapsed:.1f}s")
-    
-    return result if result else "❌ Aucune réponse reçue (flux vide ou timeout)."
+        return f"❌ Erreur lors de la lecture de la réponse : {e}"
 
 def generate_with_runpod(model: str, system_prompt: str, user_text: str,
                         num_ctx: int, num_predict: int, temperature: float = 0.2,
-                        timeout: int = 85, endpoint: str = "", token: str = "") -> str:
-    """Génère une réponse avec RunPod API - Version avec timeout Cloudflare compatible."""
+                        timeout: int = 900, endpoint: str = "", token: str = "") -> str:
+    """Génère une réponse avec RunPod API - Version avec séparation système/utilisateur."""
     if not endpoint or not token:
         return "❌ Endpoint et token RunPod requis"
-    
-    # Timeout sécurisé pour Cloudflare (85s max)
-    safe_timeout = min(timeout, 85)
     
     url = f"{endpoint}/v1/chat/completions"
     
     # SÉPARATION CLAIRE : messages système vs utilisateur
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_text}
+        {"role": "system", "content": system_prompt},  # Prompt système (instructions)
+        {"role": "user", "content": user_text}         # Texte utilisateur
     ]
     
     payload = {
@@ -133,15 +116,9 @@ def generate_with_runpod(model: str, system_prompt: str, user_text: str,
     
     print(f"🤖 RunPod - Prompt système : {len(system_prompt)} caractères")
     print(f"📄 RunPod - Texte utilisateur : {len(user_text)} caractères")
-    print(f"⏱️ Timeout sécurisé : {safe_timeout}s (Cloudflare compatible)")
-    
-    start_time = time.time()
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=safe_timeout)
-        
-        elapsed = time.time() - start_time
-        print(f"✅ Requête RunPod terminée en {elapsed:.1f}s")
+        response = requests.post(url, json=payload, headers=headers, timeout=timeout)
         
         if response.status_code != 200:
             return f"❌ Erreur RunPod HTTP {response.status_code} : {response.text}"
@@ -154,47 +131,16 @@ def generate_with_runpod(model: str, system_prompt: str, user_text: str,
             return f"❌ Réponse RunPod invalide : {data}"
             
     except requests.exceptions.Timeout:
-        elapsed = time.time() - start_time
-        return f"❌ Erreur : Délai RunPod dépassé ({elapsed:.1f}s/{safe_timeout}s). Utilisez le mode chunking pour les documents longs."
+        return f"❌ Erreur : Délai dépassé ({timeout}s)."
     except Exception as e:
         return f"❌ Erreur RunPod : {e}"
 
 # =============================================================================
-# FONCTIONS UTILITAIRES MODIFIÉES
+# FONCTIONS UTILITAIRES INCHANGÉES
 # =============================================================================
 
-def calculate_smart_timeout(text_length: int, model: str) -> int:
-    """Calcule un timeout intelligent compatible Cloudflare (max 85s)."""
-    base_timeout = 30  # Réduit de 60s à 30s
-    text_factor = max(1, text_length // 2000)  # Plus agressif (2000 au lieu de 1000)
-    
-    # Facteur modèle (certains modèles sont plus lents)
-    model_factors = {
-        "llama": 1.8,  # Réduit de 2 à 1.8
-        "mistral": 1.2,  # Réduit de 1.5 à 1.2
-        "deepseek": 1.1,  # Réduit de 1.3 à 1.1
-        "mixtral": 2.0,  # Nouveau: Mixtral est plus lent
-        "default": 1
-    }
-    
-    model_factor = model_factors.get("default", 1)
-    for key, factor in model_factors.items():
-        if key in model.lower():
-            model_factor = factor
-            break
-    
-    timeout = int(base_timeout + (text_factor * model_factor))
-    # LIMITATION CLOUDFLARE : Maximum 85 secondes
-    safe_timeout = min(timeout, 85)
-    
-    if timeout > 85:
-        print(f"⚠️ Timeout calculé ({timeout}s) réduit à {safe_timeout}s (limite Cloudflare)")
-        print(f"💡 Conseil : Utilisez le mode chunking pour ce document ({text_length:,} caractères)")
-    
-    return safe_timeout
-
 def get_ollama_models(ollama_url: str = "http://localhost:11434"):
-    """Récupère la liste des modèles Ollama disponibles avec timeout rapide."""
+    """Récupère la liste des modèles Ollama disponibles."""
     fallback_models = [
         "mistral:7b-instruct",
         "mistral:latest", 
@@ -204,8 +150,7 @@ def get_ollama_models(ollama_url: str = "http://localhost:11434"):
     ]
     
     try:
-        print(f"🔍 Récupération modèles Ollama depuis {ollama_url}...")
-        # Timeout rapide pour éviter les blocages
+        print(f"🔍 Tentative de récupération des modèles Ollama depuis {ollama_url}...")
         r = requests.get(f"{ollama_url}/api/tags", timeout=10)
         
         if r.status_code != 200:
@@ -222,18 +167,15 @@ def get_ollama_models(ollama_url: str = "http://localhost:11434"):
                 names.append(name)
         
         if not names:
-            print("⚠️ Aucun modèle trouvé, utilisation des modèles de fallback")
+            print("⚠️ Aucun modèle trouvé dans la réponse, utilisation des modèles de fallback")
             return fallback_models
         
-        print(f"✅ {len(names)} modèle(s) récupéré(s)")
+        print(f"✅ Total: {len(names)} modèle(s) récupéré(s) depuis l'API")
         return names
         
     except requests.exceptions.ConnectionError:
-        print(f"❌ Ollama non accessible sur {ollama_url}")
+        print(f"❌ Ollama non accessible sur {ollama_url} (connexion refusée)")
         print("Vérifiez qu'Ollama est démarré avec: ollama serve")
-        return fallback_models
-    except requests.exceptions.Timeout:
-        print(f"❌ Timeout connexion Ollama (10s)")
         return fallback_models
     except Exception as e:
         print(f"❌ Erreur récupération modèles: {e}")
@@ -267,7 +209,7 @@ def refresh_models(provider, ollama_url):
     return gr.update(choices=models, value=models[0] if models else ""), info
 
 def validate_ollama_url(url: str) -> tuple:
-    """Valide une URL Ollama et teste la connexion avec timeout rapide."""
+    """Valide une URL Ollama et teste la connexion."""
     if not url.strip():
         return False, "URL vide"
     
@@ -276,7 +218,7 @@ def validate_ollama_url(url: str) -> tuple:
         url = f"http://{url}"
     
     try:
-        # Timeout rapide pour éviter les blocages
+        import requests
         response = requests.get(f"{url}/api/tags", timeout=5)
         if response.status_code == 200:
             data = response.json()
@@ -287,12 +229,12 @@ def validate_ollama_url(url: str) -> tuple:
     except requests.exceptions.ConnectionError:
         return False, "Impossible de se connecter - vérifiez que le serveur Ollama est démarré"
     except requests.exceptions.Timeout:
-        return False, "Délai de connexion dépassé (5s)"
+        return False, "Délai de connexion dépassé"
     except Exception as e:
         return False, f"Erreur : {str(e)}"
 
 def test_connection(provider, ollama_url, runpod_endpoint, runpod_token):
-    """Test la connexion selon le fournisseur sélectionné avec timeout rapide."""
+    """Test la connexion selon le fournisseur sélectionné."""
     if provider == "Ollama local":
         success, message = validate_ollama_url("http://localhost:11434")
         return f"Test connexion Ollama local : {message}"
@@ -308,105 +250,41 @@ def test_connection(provider, ollama_url, runpod_endpoint, runpod_token):
             return "Test connexion : Endpoint et token RunPod requis"
         
         try:
+            import requests
             headers = {
                 "Authorization": f"Bearer {runpod_token}",
                 "Content-Type": "application/json"
             }
-            # Test rapide sans vraie requête
+            # Test simple sans vraie requête pour éviter les coûts
             url = f"{runpod_endpoint}/v1/models"
             response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code in [200, 404]:  # 404 acceptable
-                return "Test connexion RunPod : ✅ Connexion réussie"
+            if response.status_code in [200, 404]:  # 404 acceptable pour certains endpoints
+                return "Test connexion RunPod : Connexion réussie"
             else:
-                return f"Test connexion RunPod : ❌ Erreur HTTP {response.status_code}"
-        except requests.exceptions.Timeout:
-            return "Test connexion RunPod : ❌ Timeout (10s) - Vérifiez l'endpoint"
+                return f"Test connexion RunPod : Erreur HTTP {response.status_code}"
         except Exception as e:
-            return f"Test connexion RunPod : ❌ Erreur - {str(e)}"
+            return f"Test connexion RunPod : Erreur - {str(e)}"
     
     return "Test connexion : Fournisseur non reconnu"
 
-# =============================================================================
-# NOUVELLES FONCTIONS POUR GESTION TIMEOUT
-# =============================================================================
-
-def estimate_processing_time(text_length: int, model: str, mode: str = "normal") -> dict:
-    """Estime le temps de traitement et recommande une stratégie."""
+def calculate_smart_timeout(text_length: int, model: str) -> int:
+    """Calcule un timeout intelligent basé sur la longueur du texte et le modèle."""
+    base_timeout = 60
+    text_factor = max(1, text_length // 1000)  # 1 seconde par 1000 caractères
     
-    # Estimation base (caractères par seconde selon le modèle)
-    model_speeds = {
-        "mistral": 1000,    # caractères/seconde
-        "llama": 800,
-        "mixtral": 600,     # Plus lent mais plus précis
-        "deepseek": 900,
-        "default": 800
+    # Facteur modèle (certains modèles sont plus lents)
+    model_factors = {
+        "llama": 2,
+        "mistral": 1.5,
+        "deepseek": 1.3,
+        "default": 1
     }
     
-    speed = model_speeds.get("default", 800)
-    for key, model_speed in model_speeds.items():
+    model_factor = model_factors.get("default", 1)
+    for key, factor in model_factors.items():
         if key in model.lower():
-            speed = model_speed
+            model_factor = factor
             break
     
-    estimated_time = text_length / speed
-    
-    # Facteur mode
-    mode_factors = {
-        "rapide": 0.8,
-        "normal": 1.0,
-        "expert": 1.3,
-        "hybride": 1.5  # Plusieurs étapes
-    }
-    
-    factor = mode_factors.get(mode.lower(), 1.0)
-    final_time = estimated_time * factor
-    
-    # Recommandations
-    if final_time > 80:
-        strategy = "chunking_required"
-        recommendation = "⚠️ Document trop long - Mode chunking OBLIGATOIRE"
-    elif final_time > 60:
-        strategy = "chunking_recommended"
-        recommendation = "💡 Document long - Mode chunking recommandé"
-    elif final_time > 40:
-        strategy = "monitoring"
-        recommendation = "👀 Document modéré - Surveillance recommandée"
-    else:
-        strategy = "direct"
-        recommendation = "✅ Document compatible traitement direct"
-    
-    return {
-        "estimated_time": round(final_time, 1),
-        "strategy": strategy,
-        "recommendation": recommendation,
-        "cloudflare_safe": final_time < 80,
-        "text_length": text_length,
-        "model_speed": speed
-    }
-
-def should_use_chunking(text_length: int, model: str, mode: str = "normal") -> bool:
-    """Détermine si le chunking est nécessaire pour éviter timeout 524."""
-    estimation = estimate_processing_time(text_length, model, mode)
-    return estimation["strategy"] in ["chunking_required", "chunking_recommended"]
-
-def get_safe_chunk_size(model: str, target_time: int = 60) -> int:
-    """Calcule une taille de chunk sûre pour rester sous la limite de temps."""
-    model_speeds = {
-        "mistral": 1000,
-        "llama": 800,
-        "mixtral": 600,
-        "deepseek": 900,
-        "default": 800
-    }
-    
-    speed = model_speeds.get("default", 800)
-    for key, model_speed in model_speeds.items():
-        if key in model.lower():
-            speed = model_speed
-            break
-    
-    # Taille maximale pour rester sous target_time secondes
-    safe_size = int(speed * target_time * 0.8)  # Marge de sécurité 20%
-    
-    # Limites pratiques
-    return max(1000, min(safe_size, 8000))
+    timeout = int(base_timeout + (text_factor * model_factor))
+    return min(timeout, 1800)  # Maximum 30 minutes

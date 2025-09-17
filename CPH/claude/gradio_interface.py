@@ -2,874 +2,687 @@
 # -*- coding: utf-8 -*-
 
 """
-Interface utilisateur Gradio pour OCR Juridique - VERSION AVEC .ENV
-Version: 8.4-ENV-COMPLETE
-Date: 2025-09-16
-Utilise VOS modules existants + gestion sécurisée des clés API via .env
+Interface Gradio OCR Juridique - VERSION COMPLÈTE AVEC MODULES HYBRIDES
+Version: 8.9-COMPLETE-HYBRID
+Date: 2025-09-17
+OBJECTIF: Interface complète avec analyse hybride + analyse simple intégrées
 """
 
 import os
 import gradio as gr
-from datetime import datetime
 import json
-import threading
 import time
 import requests
-
-
-def get_optimal_gpu_config(model_name: str, text_length: int) -> dict:
-    """Retourne une configuration GPU optimale selon le modèle et la taille du texte."""
-    
-    # Configuration de base pour forcer le GPU
-    base_config = {
-        "num_gpu": 50,  # Forcer l'utilisation GPU
-        "num_batch": 512,
-        "num_thread": 8,
-        "repeat_penalty": 1.1,
-        "top_p": 0.9
-    }
-    
-    # Ajustements selon le modèle
-    if "7b" in model_name.lower():
-        base_config.update({
-            "num_gpu": 50,  # Utilisation GPU maximale
-            "num_batch": 512,
-            "num_ctx": 8192 if text_length > 4000 else 4096
-        })
-    elif "13b" in model_name.lower():
-        base_config.update({
-            "num_gpu": 45,  # Légèrement moins pour modèles plus gros
-            "num_batch": 256,
-            "num_ctx": 4096
-        })
-    elif "mixtral" in model_name.lower() or "8x7b" in model_name.lower():
-        base_config.update({
-            "num_gpu": 40,  # Mixtral nécessite plus de VRAM
-            "num_batch": 256,
-            "num_ctx": 8192
-        })
-    elif "70b" in model_name.lower():
-        base_config.update({
-            "num_gpu": 30,  # Gros modèles
-            "num_batch": 128,
-            "num_ctx": 4096
-        })
-    
-    # Ajustements selon la taille du texte
-    if text_length > 8000:
-        base_config["num_ctx"] = min(base_config.get("num_ctx", 4096), 8192)
-        base_config["num_batch"] = max(base_config.get("num_batch", 256), 512)
-    
-    return base_config
+from datetime import datetime
+import threading
 
 # ========================================
-# VARIABLES GLOBALES - INITIALISATION
+# IMPORTS DES MODULES EXISTANTS
 # ========================================
 
-# Initialiser les variables globalement pour éviter les erreurs
-MODULES_AVAILABLE = False
-ENV_AVAILABLE = False
+# Modules de base (déjà fonctionnels)
+from processing_pipeline import process_file_to_text
+from ai_providers import generate_with_ollama, generate_with_runpod, get_ollama_models
+from config import DEFAULT_PROMPT_TEXT, EXPERT_PROMPT_TEXT
 
-# ========================================
-# IMPORTS DES MODULES EXISTANTS + ENV
-# ========================================
-
+# Modules avancés (à intégrer)
 try:
-    # VOS modules qui existent réellement
-    from ai_providers import (
-        generate_with_ollama, 
-        generate_with_runpod, 
-        get_ollama_models,
-        test_connection,
-        calculate_smart_timeout
-    )
     from chunck_analysis import ChunkAnalyzer
-    from prompt_manager import prompt_manager, get_all_prompts_for_dropdown, get_prompt_content
-    from processing_pipeline import process_file_to_text, do_analysis_only
-    from config import DEFAULT_PROMPT_TEXT, EXPERT_PROMPT_TEXT
-    
-    MODULES_AVAILABLE = True
-    print("✅ Tous les modules existants chargés avec succès")
-    
+    from ai_wrapper import ai_call_wrapper, test_ai_connection, validate_ai_params
+    CHUNK_ANALYSIS_AVAILABLE = True
+    print("✅ Module d'analyse par chunks disponible")
 except ImportError as e:
-    print(f"❌ Erreur import modules: {e}")
-    MODULES_AVAILABLE = False
+    print(f"⚠️ Module d'analyse par chunks non disponible: {e}")
+    CHUNK_ANALYSIS_AVAILABLE = False
 
-# Gestionnaire d'environnement (nouveau)
+# Tentative d'import du module hybride
 try:
-    from env_manager import (
-        env_manager, 
-        get_api_config, 
-        get_app_config, 
-        get_chunk_config,
-        create_env_management_interface
-    )
-    ENV_AVAILABLE = True
-    print("✅ Gestionnaire .env chargé")
+    # Si vous avez un module hybrid_analyzer
+    from hybrid_analyzer import HybridAnalyzer, create_hybrid_analyzer
+    HYBRID_AVAILABLE = True
+    print("✅ Module d'analyse hybride disponible")
 except ImportError:
-    ENV_AVAILABLE = False
-    print("⚠️ Gestionnaire .env non disponible - continuez avec interface actuelle")
+    print("⚠️ Module d'analyse hybride non disponible - mode simple uniquement")
+    HYBRID_AVAILABLE = False
+
+# Module de gestion des prompts
+try:
+    from prompt_manager import prompt_manager, get_all_prompts_for_dropdown, get_prompt_content
+    PROMPT_MANAGER_AVAILABLE = True
+    print("✅ Gestionnaire de prompts disponible")
+except ImportError:
+    print("⚠️ Gestionnaire de prompts non disponible")
+    PROMPT_MANAGER_AVAILABLE = False
 
 # ========================================
-# CONFIGURATION RÉELLE BASÉE SUR VOS MODULES + .ENV
+# CONFIGURATION GLOBALE
 # ========================================
-
-# Domaines supportés (basés sur vos prompts existants)
-SUPPORTED_DOMAINS = {
-    "droit_travail": "Droit du travail",
-    "contractuel": "Droit contractuel", 
-    "procedure": "Procédure civile",
-    "immobilier": "Droit immobilier"
-}
-
-# Types de synthèse disponibles
-SYNTHESIS_TYPES = {
-    "synthese_executive": "Synthèse exécutive",
-    "analyse_detaillee": "Analyse détaillée",
-    "rapport_structure": "Rapport structuré",
-    "conclusions": "Conclusions juridiques"
-}
-
-# Configuration depuis .env si disponible, sinon par défaut
-if ENV_AVAILABLE and MODULES_AVAILABLE:
-    try:
-        api_config = get_api_config()
-        chunk_config = get_chunk_config()
-        DEFAULT_CONFIG = {
-            "provider": "Ollama local",
-            "chunk_size": chunk_config["chunk_size"],
-            "chunk_overlap": chunk_config["chunk_overlap"],
-            "ollama_url": api_config["ollama_url"]
-        }
-        print(f"🔑 Configuration chargée depuis .env")
-    except Exception as e:
-        print(f"⚠️ Erreur .env: {e}, utilisation config par défaut")
-        DEFAULT_CONFIG = {
-            "provider": "Ollama local",
-            "chunk_size": 3000,
-            "chunk_overlap": 200,
-            "ollama_url": "http://localhost:11434"
-        }
-else:
-    DEFAULT_CONFIG = {
-        "provider": "Ollama local",
-        "chunk_size": 3000,
-        "chunk_overlap": 200,
-        "ollama_url": "http://localhost:11434"
-    }
 
 app_state = {
-    "current_provider": "Ollama local",
     "ollama_url": "http://localhost:11434",
-    "models_list": ["mistral:7b-instruct", "llama3:latest", "mixtral:8x7b"],
+    "models_list": ["mistral:7b", "mixtral:8x7b", "llama3.1:8b"],
     "chunk_analyzer": None,
-    "ready": MODULES_AVAILABLE
+    "hybrid_analyzer": None
 }
 
-# ========================================
-# GESTION ARRÊT AUTOMATIQUE RUNPOD
-# ========================================
+# Prompts juridiques optimisés professionnels
+PROMPTS_FALLBACK = {
+    "Analyse juridique approfondie": """Tu es avocat spécialisé en droit du travail avec 15 ans d'expérience au Barreau de Paris.
 
-class RunPodManager:
-    """Gestionnaire pour l'arrêt automatique des pods RunPod."""
-    
-    def __init__(self):
-        self.last_activity = time.time()
-        self.auto_stop_enabled = False
-        self.timeout_minutes = 15
-        self.pod_id = None
-        self.api_key = None
-        self.monitor_thread = None
-        
-    def update_activity(self):
-        """Met à jour le timestamp de dernière activité."""
-        self.last_activity = time.time()
-        
-    def configure_auto_stop(self, endpoint, token, timeout_minutes=15):
-        """Configure l'arrêt automatique."""
-        try:
-            if "runpod" in endpoint and token:
-                self.pod_id = self._extract_pod_id(endpoint)
-                self.api_key = token
-                self.timeout_minutes = timeout_minutes
-                self.auto_stop_enabled = True
-                
-                if not self.monitor_thread or not self.monitor_thread.is_alive():
-                    self.monitor_thread = threading.Thread(target=self._monitor_activity, daemon=True)
-                    self.monitor_thread.start()
-                
-                return f"Arrêt auto configuré: {timeout_minutes}min d'inactivité"
-            else:
-                return "Configuration arrêt auto échouée"
-        except Exception as e:
-            return f"Erreur config arrêt auto: {str(e)}"
-    
-    def _extract_pod_id(self, endpoint):
-        """Extrait l'ID du pod depuis l'endpoint."""
-        try:
-            if "runpod" in endpoint:
-                parts = endpoint.split("//")[1].split(".")[0].split("-")
-                return parts[-1] if len(parts) > 1 else None
-        except:
-            pass
-        return None
-    
-    def _monitor_activity(self):
-        """Thread de monitoring de l'activité."""
-        while self.auto_stop_enabled:
-            try:
-                time.sleep(60)
-                
-                if self.auto_stop_enabled and self.pod_id and self.api_key:
-                    inactive_time = (time.time() - self.last_activity) / 60
-                    
-                    if inactive_time > self.timeout_minutes:
-                        print(f"Inactivité détectée: {inactive_time:.1f}min")
-                        self._stop_pod()
-                        break
-                        
-            except Exception as e:
-                print(f"Erreur monitoring RunPod: {e}")
-                break
-    
-    def _stop_pod(self):
-        """Arrête le pod RunPod."""
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            url = f"https://api.runpod.ai/v2/{self.pod_id}/terminate"
-            response = requests.post(url, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                print(f"Pod {self.pod_id} arrêté automatiquement")
-                self.auto_stop_enabled = False
-            else:
-                print(f"Échec arrêt pod: {response.status_code}")
-                
-        except Exception as e:
-            print(f"Erreur arrêt pod: {e}")
-    
-    def disable_auto_stop(self):
-        """Désactive l'arrêt automatique."""
-        self.auto_stop_enabled = False
-        return "Arrêt automatique désactivé"
+MISSION : Analyse juridique approfondie selon la méthodologie du Conseil d'État :
 
-# Instance globale du gestionnaire
-runpod_manager = RunPodManager()
+1. QUALIFICATION JURIDIQUE DES FAITS
+- Identifie la nature exacte des faits (licenciement, rupture conventionnelle, etc.)
+- Détermine les dispositions légales applicables (Code du travail, Convention collective)
+- Précise le régime juridique et les conditions d'application
+
+2. ANALYSE DES MOYENS DE DROIT
+- Examine chaque argument juridique invoqué par les parties
+- Vérifie la conformité aux procédures légales obligatoires
+- Identifie les vices de procédure éventuels et leurs conséquences
+- Analyse l'articulation des moyens principaux et subsidiaires
+
+3. ÉVALUATION DES PRÉTENTIONS
+- Examine le bien-fondé juridique de chaque demande
+- Calcule les indemnités selon les barèmes légaux en vigueur
+- Évalue les chances de succès devant la juridiction compétente
+- Identifie les risques et opportunités procédurales
+
+STYLE : Français juridique précis, rédaction narrative structurée SANS listes à puces.
+MÉTHODE : Raisonnement juridique rigoureux, citations exactes, pas de reformulation des faits.
+FOCUS : Qualification juridique, moyens de droit, évaluation des prétentions.""",
+
+    "Extraction par chunks": """Tu es juriste senior spécialisé en procédure civile et droit du travail.
+
+MISSION : Extraction juridique précise de ce fragment de document.
+
+MÉTHODE D'ANALYSE :
+- Identifie UNIQUEMENT les éléments juridiques présents dans ce passage
+- Relève les moyens de droit invoqués avec leur qualification exacte
+- Note les références légales citées (articles, jurisprudences, conventions)
+- Extrait les demandes formulées avec leurs fondements
+
+CONSIGNES STRICTES :
+- Reste dans les limites de ce fragment, sans extrapolation
+- Utilise le vocabulaire juridique français approprié
+- N'invente aucune information absente du texte
+- Structure l'extraction par catégories juridiques
+
+STYLE : Concision juridique, terminologie précise, objectivité absolue.""",
+
+    "Fusion juridique intelligente": """Tu es magistrat expérimenté spécialisé en droit social.
+
+MISSION : Fusion cohérente d'analyses juridiques partielles en synthèse unifiée.
+
+MÉTHODE DE SYNTHÈSE :
+- Consolide les informations juridiques sans répétitions
+- Respecte la chronologie procédurale et la logique juridique française
+- Harmonise les qualifications juridiques et les références légales
+- Structure selon l'ordre logique : qualification → moyens → prétentions
+
+OBJECTIFS :
+- Créer une analyse globale cohérente et structurée
+- Éliminer les redondances tout en préservant l'exhaustivité
+- Maintenir la rigueur juridique et la précision terminologique
+- Proposer une évaluation équilibrée des positions des parties
+
+STYLE : Rédaction juridique narrative, français soutenu, argumentation structurée.""",
+
+    "Synthèse premium": """Tu es avocat aux Conseils et juriste d'entreprise senior.
+
+MISSION : Synthèse juridique premium de qualité Cour de cassation.
+
+EXIGENCES DE QUALITÉ MAXIMALE :
+- Analyse juridique de niveau expertise (15+ ans d'expérience)
+- Rédaction juridique impeccable selon les standards du Barreau
+- Structure argumentative rigoureuse et logique implacable
+- Qualification juridique précise et références exactes
+
+ARCHITECTURE DE LA SYNTHÈSE :
+- Introduction : Qualification des faits et enjeux juridiques
+- Développement : Analyse des moyens articulés selon leur force
+- Évaluation : Chances de succès, risques, recommandations stratégiques
+- Conclusion : Position juridique synthétique et orientations
+
+STYLE : Excellence rédactionnelle, terminologie juridique irréprochable, 
+argumentation de niveau Conseil d'État, clarté pédagogique."""
+}
+
+# Types d'analyse disponibles
+ANALYSIS_MODES = ["Simple directe", "Hybride par chunks"]
 
 # ========================================
-# FONCTIONS UTILITAIRES ADAPTÉES À VOS MODULES
+# FONCTIONS D'ANALYSE INTÉGRÉES
 # ========================================
 
-def load_config():
-    """Charge la configuration."""
-    if MODULES_AVAILABLE:
-        try:
-            # Initialiser l'analyseur de chunks avec VOS paramètres
-            app_state["chunk_analyzer"] = ChunkAnalyzer(
-                chunk_size=DEFAULT_CONFIG["chunk_size"],
-                overlap=DEFAULT_CONFIG["chunk_overlap"]
-            )
-            return True
-        except Exception as e:
-            print(f"Erreur chargement config: {e}")
-    return False
-
-def track_activity():
-    """Marque une activité utilisateur (pour RunPod)."""
-    runpod_manager.update_activity()
-
-# ========================================
-# FONCTIONS D'ANALYSE ADAPTÉES À VOS MODULES
-# ========================================
-
-def analyze_hybrid_mode(text1, text2, prompt, model_step1, model_step2, model_step3,
-                        provider, temperature, top_p, max_tokens, 
-                        chunk_size, chunk_overlap, domain, synthesis_type, enable_step3,
-                        ollama_url, runpod_endpoint, runpod_token):
-    """Analyse hybride en utilisant VOS modules existants."""
-    
-    track_activity()
-    
-    # Si .env disponible et paramètres manquants, utiliser .env
-    if ENV_AVAILABLE:
-        try:
-            config = get_api_config()
-            if not ollama_url and provider == "Ollama distant":
-                ollama_url = config.get("ollama_remote_url", ollama_url)
-            if provider == "RunPod.io":
-                if not runpod_endpoint:
-                    runpod_endpoint = config.get("runpod_endpoint", "")
-                if not runpod_token:
-                    runpod_token = config.get("runpod_token", "")
-        except:
-            pass
-    
-    if not MODULES_AVAILABLE:
-        return fallback_analysis(text1, text2, prompt)
-    
-    # Préparation du texte
-    if text1 and text2:
-        full_text = f"=== DOCUMENT 1 ===\n{text1}\n\n=== DOCUMENT 2 ===\n{text2}"
-        doc_info = f"2 documents - {len(text1):,} + {len(text2):,} caractères"
-    elif text1:
-        full_text = text1
-        doc_info = f"1 document - {len(text1):,} caractères"
-    elif text2:
-        full_text = text2
-        doc_info = f"1 document - {len(text2):,} caractères"
-    else:
-        return ("ERREUR: Aucun texte fourni", "", "", "Aucun texte", "")
-    
+def analyze_simple_direct(text, prompt, model, provider, temperature, max_tokens, 
+                         ollama_url, runpod_endpoint, runpod_token):
+    """Analyse simple directe optimisée pour le juridique."""
     try:
-        start_time = time.time()
-        
-        # ÉTAPE 1: Découpage et extraction avec le modèle rapide
-        print(f"📄 Étape 1: Découpage et extraction avec {model_step1}")
-        
-        analyzer = ChunkAnalyzer(chunk_size=chunk_size, overlap=chunk_overlap)
-        chunks = analyzer.smart_chunk_text(full_text, preserve_structure=True)
-        
-        # Analyse de chaque chunk avec le modèle rapide (Étape 1)
-        step1_results = []
-        step1_start = time.time()
-        
-        for chunk in chunks:
-            chunk_prompt = get_prompt_content("Prompt par chunk") or prompt
-            
-            if provider == "RunPod.io":
-                result = generate_with_runpod(
-                    model=model_step1,
-                    system_prompt=chunk_prompt,
-                    user_text=chunk['text'],
-                    num_ctx=4096,
-                    num_predict=1000,
-                    temperature=temperature,
-                    endpoint=runpod_endpoint,
-                    token=runpod_token
-                )
-            else:
-                result = generate_with_ollama(
-                    model=model_step1,
-                    system_prompt=chunk_prompt,
-                    user_text=chunk['text'],
-                    num_ctx=4096,
-                    num_predict=1000,
-                    temperature=temperature,
-                    ollama_url=ollama_url
-                )
-            
-            step1_results.append(result)
-            time.sleep(0.5)  # Pause entre chunks
-        
-        step1_duration = time.time() - step1_start
-        
-        # ÉTAPE 2: Fusion avec le modèle à grand contexte
-        print(f"🔀 Étape 2: Fusion avec {model_step2}")
-        step2_start = time.time()
-        
-        # Combiner tous les résultats de l'étape 1
-        combined_analyses = "\n\n".join([f"=== ANALYSE CHUNK {i+1} ===\n{result}" 
-                                        for i, result in enumerate(step1_results)])
-        
-        fusion_prompt = get_prompt_content("Prompt de fusion") or f"""
-{prompt}
-
-TÂCHE SPÉCIALE: Fusionnez les analyses suivantes en un rapport cohérent et structuré.
-Éliminez les redondances et créez une synthèse unifiée.
-
-ANALYSES À FUSIONNER:
-{combined_analyses}
-"""
+        # Configuration optimisée pour analyses juridiques
+        juridical_config = {
+            "temperature": min(temperature, 0.4),  # Plus déterministe pour juridique
+            "top_p": 0.8,                         # Réduction créativité
+            "repeat_penalty": 1.1,                # Éviter répétitions
+            "num_ctx": 16384,                     # Contexte élargi pour juridique
+            "num_predict": max_tokens,
+            "top_k": 40                           # Vocabulaire focalisé
+        }
         
         if provider == "RunPod.io":
-            step2_result = generate_with_runpod(
-                model=model_step2,
-                system_prompt=fusion_prompt,
-                user_text="FUSION DES ANALYSES DEMANDÉE",
-                num_ctx=8192,
-                num_predict=max_tokens,
-                temperature=temperature,
-                endpoint=runpod_endpoint,
-                token=runpod_token
-            )
-        else:
-            step2_result = generate_with_ollama(
-                model=model_step2,
-                system_prompt=fusion_prompt,
-                user_text="FUSION DES ANALYSES DEMANDÉE",
-                num_ctx=8192,
-                num_predict=max_tokens,
-                temperature=temperature,
-                ollama_url=ollama_url
-            )
-        
-        step2_duration = time.time() - step2_start
-        
-        # ÉTAPE 3: Synthèse premium (optionnelle)
-        step3_result = step2_result
-        step3_duration = 0
-        
-        if enable_step3:
-            print(f"✨ Étape 3: Synthèse premium avec {model_step3}")
-            step3_start = time.time()
+            if not runpod_endpoint or not runpod_token:
+                return "⛔ Endpoint et token RunPod requis"
             
-            synthesis_prompt = f"""
-{prompt}
-
-TÂCHE DE SYNTHÈSE PREMIUM: Créez une synthèse narrative de haute qualité à partir de l'analyse suivante.
-Type de synthèse demandé: {synthesis_type}
-Domaine spécialisé: {domain if domain != "Aucun" else "Général"}
-
-Améliorez la qualité rédactionnelle, la structure et la clarté.
-
-ANALYSE À AMÉLIORER:
-{step2_result}
-"""
-            
-            if provider == "RunPod.io":
-                step3_result = generate_with_runpod(
-                    model=model_step3,
-                    system_prompt=synthesis_prompt,
-                    user_text="SYNTHÈSE PREMIUM DEMANDÉE",
-                    num_ctx=4096,
-                    num_predict=max_tokens,
-                    temperature=temperature + 0.1,  # Légèrement plus créatif
-                    endpoint=runpod_endpoint,
-                    token=runpod_token
-                )
-            else:
-                step3_result = generate_with_ollama(
-                    model=model_step3,
-                    system_prompt=synthesis_prompt,
-                    user_text="SYNTHÈSE PREMIUM DEMANDÉE",
-                    num_ctx=4096,
-                    num_predict=max_tokens,
-                    temperature=temperature + 0.1,
-                    ollama_url=ollama_url
-                )
-            
-            step3_duration = time.time() - step3_start
-        
-        total_duration = time.time() - start_time
-        
-        # Formatage du résultat final
-        current_time = datetime.now().strftime("%d/%m/%Y à %H:%M:%S")
-        
-        formatted_result = f"""{'=' * 80}
-                    ANALYSE JURIDIQUE HYBRIDE 3 ÉTAPES
-{'=' * 80}
-
-HORODATAGE: {current_time}
-ARCHITECTURE: Extraction → Fusion → Synthèse
-{doc_info}
-CONFIGURATION: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
-
-MODÈLES UTILISÉS:
-🚀 Étape 1 (Extraction): {model_step1} - {step1_duration:.1f}s
-🔀 Étape 2 (Fusion): {model_step2} - {step2_duration:.1f}s
-{'✨ Étape 3 (Synthèse): ' + model_step3 + f' - {step3_duration:.1f}s' if enable_step3 else '○ Étape 3: Désactivée'}
-
-PERFORMANCE:
-- Chunks traités: {len(chunks)}
-- Durée totale: {total_duration:.1f}s
-- Fournisseur: {provider}
-
-{'-' * 80}
-                        PROMPT UTILISÉ
-{'-' * 80}
-
-{prompt}
-
-{'-' * 80}
-                    RÉSULTAT FINAL
-{'-' * 80}
-
-{step3_result}
-
-{'-' * 80}
-                DÉTAIL DES ANALYSES PAR CHUNKS
-{'-' * 80}
-
-{combined_analyses}
-"""
-        
-        # Statistiques
-        stats1 = f"{len(text1):,} caractères" if text1 else "Aucun texte"
-        stats2 = f"{len(text2):,} caractères" if text2 else "Aucun texte"
-        
-        # Informations de debug
-        debug_info = f"""ANALYSE HYBRIDE EXÉCUTÉE
-{'=' * 50}
-
-MODE: Hybride 3 étapes
-CONFIGURATION: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
-DOMAINE: {domain}
-SYNTHÈSE: {synthesis_type if enable_step3 else 'Désactivée'}
-
-MODÈLES UTILISÉS:
-- Étape 1 (Extraction): {model_step1}
-- Étape 2 (Fusion): {model_step2}
-- Étape 3 (Synthèse): {model_step3 if enable_step3 else 'N/A'}
-
-PERFORMANCE:
-- Chunks traités: {len(chunks)}
-- Durée totale: {total_duration:.1f}s
-- Score efficacité: {len(chunks) / total_duration * 60:.1f} chunks/min
-
-ARCHITECTURE:
-✓ Extraction rapide → {model_step1}
-✓ Fusion intelligente → {model_step2}
-{'✓' if enable_step3 else '○'} Synthèse premium → {model_step3 if enable_step3 else 'Désactivée'}"""
-        
-        # Rapport détaillé
-        analysis_report = f"""RAPPORT D'ANALYSE HYBRIDE
-
-Étapes exécutées:
-1. Extraction par chunks: {step1_duration:.1f}s
-2. Fusion et harmonisation: {step2_duration:.1f}s
-3. Synthèse narrative: {step3_duration:.1f}s ({'Exécutée' if enable_step3 else 'Non exécutée'})
-
-Configuration: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
-Chunks traités: {len(chunks)}
-Efficacité: {len(chunks) / total_duration * 60:.1f} chunks/min"""
-        
-        return (formatted_result, stats1, stats2, debug_info, analysis_report)
-        
-    except Exception as e:
-        error_msg = f"ERREUR ANALYSE HYBRIDE\n\n{str(e)}"
-        return (error_msg, "", "", error_msg, "Erreur")
-
-def analyze_classic_mode(text1, text2, prompt, model, provider, temperature, top_p, max_tokens,
-                        ollama_url, runpod_endpoint, runpod_token):
-    """Analyse classique en utilisant VOS modules existants."""
-    
-    track_activity()
-    
-    # Si .env disponible et paramètres manquants, utiliser .env
-    if ENV_AVAILABLE:
-        try:
-            config = get_api_config()
-            if not ollama_url and provider == "Ollama distant":
-                ollama_url = config.get("ollama_remote_url", ollama_url)
-            if provider == "RunPod.io":
-                if not runpod_endpoint:
-                    runpod_endpoint = config.get("runpod_endpoint", "")
-                if not runpod_token:
-                    runpod_token = config.get("runpod_token", "")
-        except:
-            pass
-    
-    # Préparation du texte
-    if text1 and text2:
-        full_text = f"=== DOCUMENT 1 ===\n{text1}\n\n=== DOCUMENT 2 ===\n{text2}"
-    else:
-        full_text = text1 or text2
-    
-    if not full_text:
-        return ("ERREUR: Aucun texte fourni", "", "", "Aucun texte", "")
-    
-    try:
-        # Utiliser directement vos fonctions existantes
-        if provider == "RunPod.io":
             result = generate_with_runpod(
-                model=model,
-                system_prompt=prompt,
-                user_text=full_text,
-                num_ctx=8192,
-                num_predict=max_tokens,
-                temperature=temperature,
+                model=model, 
+                system_prompt=prompt, 
+                user_text=text,
+                num_ctx=juridical_config["num_ctx"],
+                num_predict=juridical_config["num_predict"],
+                temperature=juridical_config["temperature"],
                 endpoint=runpod_endpoint,
                 token=runpod_token
             )
         else:
+            url = ollama_url if provider == "Ollama distant" else "http://localhost:11434"
             result = generate_with_ollama(
                 model=model,
                 system_prompt=prompt,
-                user_text=full_text,
-                num_ctx=8192,
-                num_predict=max_tokens,
-                temperature=temperature,
-                ollama_url=ollama_url
+                user_text=text,
+                num_ctx=juridical_config["num_ctx"],
+                num_predict=juridical_config["num_predict"],
+                temperature=juridical_config["temperature"],
+                ollama_url=url
             )
         
-        # Formatage
-        current_time = datetime.now().strftime("%d/%m/%Y à %H:%M:%S")
+        return result
+    except Exception as e:
+        return f"⛔ Erreur analyse simple: {str(e)}"
+
+def analyze_hybrid_chunks(text, prompt, model, provider, temperature, max_tokens,
+                         chunk_size, chunk_overlap, models_config,
+                         ollama_url, runpod_endpoint, runpod_token):
+    """Analyse hybride par chunks optimisée pour le juridique - utilise ChunkAnalyzer."""
+    
+    # Configuration chunks adaptée au juridique
+    juridical_chunk_size = max(chunk_size, 4000)    # Chunks plus larges pour contexte juridique
+    juridical_overlap = max(chunk_overlap, 400)     # Chevauchement important pour continuité
+    
+    # Utiliser prioritairement ChunkAnalyzer qui fonctionne
+    if CHUNK_ANALYSIS_AVAILABLE:
+        return analyze_by_chunks_enhanced(text, prompt, model, provider, temperature, max_tokens,
+                                        juridical_chunk_size, juridical_overlap, ollama_url, runpod_endpoint, runpod_token)
+    
+    # Si module hybride disponible, essayer (mode expérimental)
+    elif HYBRID_AVAILABLE:
+        try:
+            return analyze_hybrid_mode_experimental(text, prompt, models_config, provider, temperature, max_tokens,
+                                                  juridical_chunk_size, juridical_overlap, ollama_url, runpod_endpoint, runpod_token)
+        except Exception as e:
+            # Fallback vers chunks si hybride échoue
+            print(f"Hybride échoué, fallback vers chunks: {e}")
+            if CHUNK_ANALYSIS_AVAILABLE:
+                return analyze_by_chunks_enhanced(text, prompt, model, provider, temperature, max_tokens,
+                                                juridical_chunk_size, juridical_overlap, ollama_url, runpod_endpoint, runpod_token)
+    
+    # Fallback : analyse simple avec message informatif
+    result = analyze_simple_direct(text, prompt, model, provider, temperature, max_tokens,
+                                 ollama_url, runpod_endpoint, runpod_token)
+    
+    return f"""⚠️ ANALYSE SIMPLIFIÉE (Modules chunks non disponibles)
+
+{result}
+
+💡 RECOMMANDATION : Pour l'analyse juridique optimale par chunks, installez :
+- chunck_analysis.py (découpage intelligent par sections juridiques)
+- hybrid_analyzer.py (analyse hybride 3 étapes : extraction → fusion → synthèse premium)"""
+
+def analyze_hybrid_mode_experimental(text, prompt, models_config, provider, temperature, max_tokens,
+                                   chunk_size, chunk_overlap, ollama_url, runpod_endpoint, runpod_token):
+    """Mode hybride avec votre module HybridAnalyzer réel."""
+    try:
+        # Initialiser selon votre API réelle
+        if not app_state["hybrid_analyzer"]:
+            # Créer un ai_provider_manager compatible
+            class AIProviderManager:
+                def __init__(self):
+                    self.provider = provider
+                    self.ollama_url = ollama_url
+                    self.runpod_endpoint = runpod_endpoint
+                    self.runpod_token = runpod_token
+                
+                def call_model(self, model, system_prompt, user_text, **kwargs):
+                    if provider == "RunPod.io":
+                        return generate_with_runpod(
+                            model=model,
+                            system_prompt=system_prompt,
+                            user_text=user_text,
+                            num_ctx=16384,
+                            num_predict=max_tokens,
+                            temperature=0.3,
+                            endpoint=runpod_endpoint,
+                            token=runpod_token
+                        )
+                    else:
+                        url = ollama_url if provider == "Ollama distant" else "http://localhost:11434"
+                        return generate_with_ollama(
+                            model=model,
+                            system_prompt=system_prompt,
+                            user_text=user_text,
+                            num_ctx=16384,
+                            num_predict=max_tokens,
+                            temperature=0.3,
+                            ollama_url=url
+                        )
+            
+            ai_provider = AIProviderManager()
+            app_state["hybrid_analyzer"] = create_hybrid_analyzer(ai_provider)
+        
+        analyzer = app_state["hybrid_analyzer"]
+        
+        # Utiliser analyze_document avec les bons paramètres
+        result = analyzer.analyze_document(
+            text=text,
+            analysis_type="juridique",
+            system_prompt=prompt,
+            provider=provider,
+            model=models_config.get("step2", "mixtral:8x7b"),
+            temperature=0.3,
+            max_tokens=max_tokens,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+        
+        # Formatage du résultat selon le type de retour
+        if isinstance(result, dict):
+            analysis_content = result.get('content', result.get('analysis', str(result)))
+            processing_time = result.get('processing_time', 0)
+            confidence = result.get('confidence', 'N/A')
+            
+            formatted = f"""⚡ ANALYSE HYBRIDE JURIDIQUE
+
+🎯 Configuration :
+- Type d'analyse : juridique spécialisée
+- Provider : {provider}
+- Modèle principal : {models_config.get("step2", "mixtral:8x7b")}
+- Chunks : {chunk_size} caractères
+
+📊 Métadonnées :
+- Durée : {processing_time:.1f}s
+- Confiance : {confidence}
+
+📝 ANALYSE JURIDIQUE :
+
+{analysis_content}
+
+💡 Analyse produite avec HybridAnalyzer optimisé juridique."""
+        else:
+            formatted = f"""⚡ ANALYSE HYBRIDE JURIDIQUE
+
+📝 RÉSULTAT :
+
+{result}
+
+💡 Analyse produite avec votre module HybridAnalyzer."""
+        
+        return formatted
+        
+    except Exception as e:
+        return f"⛔ Erreur module hybride: {str(e)}"
+
+def analyze_by_chunks_enhanced(text, prompt, model, provider, temperature, max_tokens,
+                              chunk_size, chunk_overlap, ollama_url, runpod_endpoint, runpod_token):
+    """Analyse par chunks optimisée avec prompts juridiques spécialisés."""
+    try:
+        # Initialiser l'analyseur avec configuration juridique
+        if not app_state["chunk_analyzer"]:
+            app_state["chunk_analyzer"] = ChunkAnalyzer(chunk_size=chunk_size, overlap=chunk_overlap)
+        
+        analyzer = app_state["chunk_analyzer"]
+        
+        # Découper avec préservation structure juridique
+        chunks = analyzer.smart_chunk_text(text, preserve_structure=True)
+        print(f"📄 Découpage juridique en {len(chunks)} chunks")
+        
+        # Configuration optimisée pour juridique
+        juridical_config = {
+            "temperature": 0.3,     # Déterminisme pour extraction juridique
+            "num_ctx": 12288,       # Contexte adapté aux chunks
+            "num_predict": 2000,    # Analyses de chunks détaillées
+            "top_p": 0.8,
+            "repeat_penalty": 1.1
+        }
+        
+        # Prompt spécialisé extraction juridique
+        extraction_prompt = PROMPTS_FALLBACK["Extraction par chunks"]
+        
+        # Fonction d'IA optimisée juridique
+        def ai_function_juridical(text, prompt, **kwargs):
+            if provider == "RunPod.io":
+                return generate_with_runpod(
+                    model=model,
+                    system_prompt=prompt,
+                    user_text=text,
+                    num_ctx=juridical_config["num_ctx"],
+                    num_predict=juridical_config["num_predict"],
+                    temperature=juridical_config["temperature"],
+                    endpoint=runpod_endpoint,
+                    token=runpod_token
+                )
+            else:
+                url = ollama_url if provider == "Ollama distant" else "http://localhost:11434"
+                return generate_with_ollama(
+                    model=model,
+                    system_prompt=prompt,
+                    user_text=text,
+                    num_ctx=juridical_config["num_ctx"],
+                    num_predict=juridical_config["num_predict"],
+                    temperature=juridical_config["temperature"],
+                    ollama_url=url
+                )
+        
+        # Analyser les chunks avec prompt spécialisé
+        analyzed_chunks = analyzer.analyze_chunks_with_ai(chunks, extraction_prompt, ai_function_juridical)
+        
+        # Synthèse avec prompt juridique spécialisé
+        fusion_prompt = PROMPTS_FALLBACK["Fusion juridique intelligente"]
+        
+        synthesis = analyzer.synthesize_analyses(analyzed_chunks, fusion_prompt, ai_function_juridical)
+        
+        return f"""📊 ANALYSE JURIDIQUE PAR CHUNKS OPTIMISÉE
+
+🔧 Configuration utilisée :
+- Chunks juridiques : {len(chunks)} segments de {chunk_size:,} caractères
+- Chevauchement : {chunk_overlap} caractères pour continuité procédurale
+- Modèle d'extraction : {model} (température 0.3 pour précision)
+- Prompt spécialisé : Extraction juridique ciblée + Fusion intelligente
+
+📝 SYNTHÈSE JURIDIQUE :
+
+{synthesis}"""
+        
+    except Exception as e:
+        return f"⛔ Erreur analyse juridique par chunks: {str(e)}"
+
+def analyze_hybrid_mode_enhanced(text, prompt, models_config, provider, temperature, max_tokens,
+                                chunk_size, chunk_overlap, ollama_url, runpod_endpoint, runpod_token):
+    """Analyse hybride 3 étapes optimisée pour qualité juridique maximale."""
+    if not HYBRID_AVAILABLE:
+        return "⛔ Module d'analyse hybride non disponible"
+    
+    try:
+        # Initialiser l'analyseur hybride selon votre API
+        if not app_state["hybrid_analyzer"]:
+            # Créer un provider manager basique pour votre API
+            class BasicAIProviderManager:
+                def __init__(self):
+                    self.provider = provider
+                    self.ollama_url = ollama_url
+                    self.runpod_endpoint = runpod_endpoint
+                    self.runpod_token = runpod_token
+                
+                def call_ai(self, model, system_prompt, user_text, **kwargs):
+                    if provider == "RunPod.io":
+                        return generate_with_runpod(
+                            model=model,
+                            system_prompt=system_prompt,
+                            user_text=user_text,
+                            num_ctx=16384,
+                            num_predict=max_tokens,
+                            temperature=0.3,
+                            endpoint=runpod_endpoint,
+                            token=runpod_token
+                        )
+                    else:
+                        url = ollama_url if provider == "Ollama distant" else "http://localhost:11434"
+                        return generate_with_ollama(
+                            model=model,
+                            system_prompt=system_prompt,
+                            user_text=user_text,
+                            num_ctx=16384,
+                            num_predict=max_tokens,
+                            temperature=0.3,
+                            ollama_url=url
+                        )
+            
+            ai_provider = BasicAIProviderManager()
+            app_state["hybrid_analyzer"] = create_hybrid_analyzer(ai_provider)
+        
+        analyzer = app_state["hybrid_analyzer"]
+        
+        # Configuration modèles optimale pour juridique
+        step1_model = models_config.get("step1", "mistral:7b")
+        step2_model = models_config.get("step2", "mixtral:8x7b")  
+        step3_model = models_config.get("step3", "mixtral:8x7b")
+        
+        # Analyse hybride avec votre API
+        result = analyzer.analyze_hybrid(
+            text=text,
+            user_prompt=prompt,
+            provider=provider,
+            ollama_url=ollama_url,
+            runpod_endpoint=runpod_endpoint,
+            runpod_token=runpod_token,
+            step1_model=step1_model,
+            step2_model=step2_model,
+            step3_model=step3_model,
+            temperature=0.3,
+            max_tokens=max_tokens,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+        
+        if result.get("success"):
+            formatted = f"""⚡ ANALYSE JURIDIQUE HYBRIDE PREMIUM
+
+🎯 Architecture 3 étapes optimisée :
+└── Phase 1 : Extraction juridique ciblée ({step1_model})
+└── Phase 2 : Fusion contextuelle intelligente ({step2_model}) 
+└── Phase 3 : Synthèse premium niveau expertise ({step3_model})
+
+📊 Performance :
+- Chunks traités : {result.get('metadata', {}).get('chunks_count', 'N/A')}
+- Durée totale : {result.get('metadata', {}).get('processing_time', 0):.1f}s
+- Qualité juridique : Premium (configuration optimisée)
+
+📝 SYNTHÈSE JURIDIQUE FINALE :
+
+{result.get('result', 'Résultat non disponible')}
+
+💡 Analyse produite avec méthodologie d'expertise juridique française."""
+            
+            return formatted
+        else:
+            return f"⛔ Erreur analyse hybride: {result.get('error', 'Erreur inconnue')}"
+            
+    except Exception as e:
+        return f"⛔ Erreur analyse hybride: {str(e)}"
+
+def analyze_hybrid_mode(text, prompt, models_config, provider, temperature, max_tokens,
+                       chunk_size, chunk_overlap, ollama_url, runpod_endpoint, runpod_token):
+    """Analyse hybride 3 étapes (si module disponible)."""
+    if not HYBRID_AVAILABLE:
+        return "⛔ Module d'analyse hybride non disponible - utilisez l'analyse par chunks"
+    
+    try:
+        # Initialiser l'analyseur hybride
+        if not app_state["hybrid_analyzer"]:
+            app_state["hybrid_analyzer"] = create_hybrid_analyzer(
+                chunk_size=chunk_size,
+                overlap=chunk_overlap
+            )
+        
+        analyzer = app_state["hybrid_analyzer"]
+        
+        # Configuration des modèles par étape
+        step1_model = models_config.get("step1", model)
+        step2_model = models_config.get("step2", model)  
+        step3_model = models_config.get("step3", model)
+        
+        # Analyse hybride
+        result = analyzer.analyze_hybrid(
+            text=text,
+            user_prompt=prompt,
+            provider=provider,
+            ollama_url=ollama_url,
+            runpod_endpoint=runpod_endpoint,
+            runpod_token=runpod_token,
+            step1_model=step1_model,
+            step2_model=step2_model,
+            step3_model=step3_model,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        
+        if result["success"]:
+            return analyzer.format_hybrid_result(result, prompt, f"{len(text):,} caractères")
+        else:
+            return f"⛔ Erreur analyse hybride: {result['error']}"
+            
+    except Exception as e:
+        return f"⛔ Erreur analyse hybride: {str(e)}"
+
+def analyze_text_complete(text, prompt, analysis_mode, model, provider, temperature, max_tokens,
+                         chunk_size, chunk_overlap, models_config,
+                         ollama_url, runpod_endpoint, runpod_token):
+    """Fonction d'analyse complète qui route vers le bon mode."""
+    if not text.strip():
+        return "⛔ Aucun texte à analyser", "", "", "Aucun texte"
+    
+    start_time = time.time()
+    
+    try:
+        print(f"🚀 Analyse {analysis_mode} - Modèle: {model} - Provider: {provider}")
+        
+        # Router vers le bon mode d'analyse
+        if analysis_mode == "Simple directe":
+            result = analyze_simple_direct(
+                text, prompt, model, provider, temperature, max_tokens,
+                ollama_url, runpod_endpoint, runpod_token
+            )
+        
+        elif analysis_mode == "Hybride par chunks":
+            result = analyze_hybrid_chunks(
+                text, prompt, model, provider, temperature, max_tokens,
+                chunk_size, chunk_overlap, models_config,
+                ollama_url, runpod_endpoint, runpod_token
+            )
+        
+        else:
+            result = "⛔ Mode d'analyse non reconnu"
+        
+        # Formatage du résultat
+        processing_time = time.time() - start_time
+        timestamp = datetime.now().strftime("%d/%m/%Y à %H:%M:%S")
+        
         formatted_result = f"""{'=' * 80}
-                    ANALYSE JURIDIQUE CLASSIQUE
+ANALYSE JURIDIQUE COMPLÈTE - {timestamp}
 {'=' * 80}
 
-HORODATAGE: {current_time}
+MODE: {analysis_mode}
 MODÈLE: {model}
 FOURNISSEUR: {provider}
-MODE: Analyse directe
-TEXTE: {len(full_text):,} caractères
-CONFIGURATION: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}
+TEXTE: {len(text):,} caractères
+DURÉE: {processing_time:.1f} secondes
 
 {'-' * 80}
-                        PROMPT UTILISÉ
+PROMPT UTILISÉ
 {'-' * 80}
 
 {prompt}
 
 {'-' * 80}
-                    RÉSULTAT DE L'ANALYSE
+RÉSULTAT DE L'ANALYSE
 {'-' * 80}
 
 {result}
 """
         
-        stats1 = f"{len(text1):,} caractères" if text1 else "Aucun texte"
-        stats2 = f"{len(text2):,} caractères" if text2 else "Aucun texte"
+        stats = f"{len(text):,} caractères"
+        debug = f"Analyse {analysis_mode} - {provider} - {model} - {processing_time:.1f}s"
         
-        debug_info = f"""ANALYSE CLASSIQUE EXÉCUTÉE
-
-Mode: Direct (sans chunks)
-Modèle: {model}
-Provider: {provider}
-Texte: {len(full_text):,} caractères
-Configuration: {'Depuis .env' if ENV_AVAILABLE else 'Par défaut'}"""
-        
-        return (formatted_result, stats1, stats2, debug_info, "Mode classique")
+        return formatted_result, stats, debug, f"Analyse {analysis_mode} terminée"
         
     except Exception as e:
-        error_msg = f"ERREUR ANALYSE CLASSIQUE\n\n{str(e)}"
-        return (error_msg, "", "", error_msg, "Erreur")
-
-def fallback_analysis(text1, text2, prompt):
-    """Analyse de fallback si modules non disponibles."""
-    return (
-        "⚠️ MODULES D'ANALYSE NON DISPONIBLES\n\nVérifiez l'installation des dépendances.",
-        f"{len(text1) if text1 else 0:,} caractères",
-        f"{len(text2) if text2 else 0:,} caractères",
-        "Mode fallback - modules manquants",
-        "Erreur: modules non disponibles"
-    )
+        error_msg = f"⛔ ERREUR ANALYSE: {str(e)}"
+        return error_msg, "", error_msg, "Erreur"
 
 # ========================================
-# FONCTIONS CALLBACK ADAPTÉES
+# FONCTIONS DE CONFIGURATION
 # ========================================
 
-def on_provider_change(provider):
-    """Gestion du changement de fournisseur."""
-    app_state["current_provider"] = provider
-    
-    ollama_visible = provider == "Ollama distant"
-    runpod_visible = provider == "RunPod.io"
-    
-    if provider == "Ollama local":
-        status = "✅ Ollama local configuré"
-        url_value = ""
-        runpod_manager.disable_auto_stop()
-    elif provider == "Ollama distant":
-        if ENV_AVAILABLE:
-            try:
-                config = get_api_config()
-                url_value = config.get("ollama_remote_url", app_state["ollama_url"])
-                status = f"🌐 Ollama distant: {url_value or 'Configurez dans .env'}"
-            except:
-                url_value = app_state["ollama_url"]
-                status = f"🌐 Ollama distant: {url_value}"
-        else:
-            url_value = app_state["ollama_url"]
-            status = f"🌐 Ollama distant: {url_value}"
-        runpod_manager.disable_auto_stop()
-    else:
-        url_value = ""
-        if ENV_AVAILABLE:
-            try:
-                config = get_api_config()
-                configured = bool(config.get("runpod_endpoint") and config.get("runpod_token"))
-                status = f"☁️ RunPod: {'✅ Configuré dans .env' if configured else '❌ Configurez dans .env'}"
-            except:
-                status = "☁️ RunPod - Configurez endpoint et token"
-        else:
-            status = "☁️ RunPod - Configurez endpoint et token"
-    
-    return (
-        gr.update(visible=ollama_visible, value=url_value),
-        gr.update(visible=runpod_visible, value=""),
-        gr.update(visible=runpod_visible, value=""),
-        gr.update(visible=runpod_visible),
-        gr.update(visible=runpod_visible),
-        gr.update(value=status)
-    )
-
-def test_connection_real(provider, ollama_url, runpod_endpoint, runpod_token):
-    """Test de connexion réel en utilisant VOS fonctions."""
-    track_activity()
-    
-    if not MODULES_AVAILABLE:
-        return (
-            gr.update(choices=["mistral:7b-instruct", "llama3:latest"], value="mistral:7b-instruct"),
-            gr.update(value="⚠️ Mode dégradé - Modules non disponibles")
-        )
-    
+def test_connection_complete(provider, ollama_url, runpod_endpoint, runpod_token):
+    """Test de connexion utilisant les modules existants."""
     try:
-        # Si .env disponible et paramètres manquants, utiliser .env
-        if ENV_AVAILABLE:
-            try:
-                config = get_api_config()
-                if not ollama_url and provider == "Ollama distant":
-                    ollama_url = config.get("ollama_remote_url", ollama_url)
-                if provider == "RunPod.io":
-                    if not runpod_endpoint:
-                        runpod_endpoint = config.get("runpod_endpoint", "")
-                    if not runpod_token:
-                        runpod_token = config.get("runpod_token", "")
-            except:
-                pass
-        
-        # Utiliser VOTRE fonction de test
-        result = test_connection(provider, ollama_url, runpod_endpoint, runpod_token)
-        
-        if "réussie" in result or "Connexion" in result:
-            # Récupérer les modèles selon le provider
-            if provider in ["Ollama local", "Ollama distant"]:
+        if hasattr(test_ai_connection, '__call__'):  # Si ai_wrapper disponible
+            success, models = test_ai_connection(provider, ollama_url, runpod_endpoint, runpod_token)
+            return success, models
+        else:
+            # Fallback sur les fonctions simples
+            if provider == "RunPod.io":
+                if not runpod_endpoint or not runpod_token:
+                    return "⛔ Endpoint et token requis", []
+                headers = {"Authorization": f"Bearer {runpod_token}", "Content-Type": "application/json"}
+                response = requests.get(f"{runpod_endpoint}/v1/models", headers=headers, timeout=10)
+                if response.status_code in [200, 404]:
+                    models = ["meta-llama/Llama-3.1-70B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3"]
+                    return "✅ Connexion RunPod réussie", models
+                else:
+                    return f"⛔ Erreur RunPod {response.status_code}", []
+            else:
                 url = ollama_url if provider == "Ollama distant" else "http://localhost:11434"
                 models = get_ollama_models(url)
-            else:
-                # Modèles RunPod par défaut
-                models = [
-                    "meta-llama/Llama-3.1-70B-Instruct",
-                    "mistralai/Mistral-7B-Instruct-v0.3",
-                    "NousResearch/Nous-Hermes-2-Yi-34B"
-                ]
-            
-            app_state["models_list"] = models
-            suffix = " (.env)" if ENV_AVAILABLE else ""
-            return (
-                gr.update(choices=models, value=models[0]),
-                gr.update(value=f"✅ {result} - {len(models)} modèles{suffix}")
-            )
-        else:
-            return (
-                gr.update(),
-                gr.update(value=f"❌ {result}")
-            )
+                return f"✅ Connexion Ollama - {len(models)} modèles", models
+                
     except Exception as e:
-        return (
-            gr.update(),
-            gr.update(value=f"❌ Erreur: {str(e)}")
-        )
+        return f"⛔ Erreur test connexion: {str(e)}", []
 
-def configure_runpod_autostop(runpod_endpoint, runpod_token, timeout_minutes):
-    """Configure l'arrêt automatique RunPod."""
-    
-    # Si .env disponible et paramètres manquants, utiliser .env
-    if ENV_AVAILABLE and (not runpod_endpoint or not runpod_token):
+def get_available_prompts():
+    """Récupère tous les prompts disponibles."""
+    if PROMPT_MANAGER_AVAILABLE:
         try:
-            config = get_api_config()
-            runpod_endpoint = config.get("runpod_endpoint", runpod_endpoint)
-            runpod_token = config.get("runpod_token", runpod_token)
+            return get_all_prompts_for_dropdown()
         except:
             pass
-    
-    if runpod_endpoint and runpod_token:
-        message = runpod_manager.configure_auto_stop(runpod_endpoint, runpod_token, timeout_minutes)
-        return gr.update(value=f"✅ {message}")
-    else:
-        return gr.update(value="❌ Endpoint et token requis")
+    return list(PROMPTS_FALLBACK.keys())
 
-def select_prompt(prompt_name):
-    """Sélection d'un prompt en utilisant VOTRE gestionnaire."""
-    if not MODULES_AVAILABLE:
-        return gr.update(), gr.update(value="❌ Gestionnaire de prompts non disponible")
-    
-    try:
-        content = get_prompt_content(prompt_name)
-        if content:
-            return (
-                gr.update(value=content),
-                gr.update(value=f"✅ Prompt '{prompt_name}' chargé")
-            )
-        else:
-            return (
-                gr.update(),
-                gr.update(value=f"❌ Prompt '{prompt_name}' non trouvé")
-            )
-    except Exception as e:
-        return (
-            gr.update(),
-            gr.update(value=f"❌ Erreur: {str(e)}")
-        )
-
-def process_file_real(file_path, clean_text=True, anonymize=False):
-    """Traitement de fichier en utilisant VOS fonctions."""
-    track_activity()
-    
-    if not file_path:
-        return "Aucun fichier", "0 caractères", ""
-    
-    if not MODULES_AVAILABLE:
-        return "⚠️ Modules non disponibles", "Simulation", "Texte simulé"
-    
-    try:
-        # Utiliser VOTRE fonction de traitement
-        message, stats, text, file_type, anon_report = process_file_to_text(
-            file_path, clean_text, anonymize, force_ocr=False
-        )
-        
-        if "❌" in message:
-            return message, "Erreur", ""
-        
-        return message, stats, text
-    except Exception as e:
-        return f"❌ Erreur: {str(e)}", "Erreur", ""
-
-def clear_all_fields():
-    """Nettoie tous les champs."""
-    track_activity()
-    if MODULES_AVAILABLE:
-        default_prompt = get_prompt_content("Analyse juridique hybride") or DEFAULT_PROMPT_TEXT
-    else:
-        default_prompt = "Tu es un expert juridique. Analyse ce document en détail."
-    
-    return (
-        "",  # text1
-        "",  # text2
-        "",  # result
-        "",  # stats1
-        "",  # stats2
-        "",  # debug
-        default_prompt,  # prompt
-        "🧹 Champs nettoyés",  # status
-        ""   # analysis_report
-    )
+def load_prompt_content(prompt_name):
+    """Charge le contenu d'un prompt."""
+    if PROMPT_MANAGER_AVAILABLE:
+        try:
+            content = get_prompt_content(prompt_name)
+            if content:
+                return content
+        except:
+            pass
+    return PROMPTS_FALLBACK.get(prompt_name, "")
 
 # ========================================
-# INTERFACE GRADIO ADAPTÉE À VOS MODULES + .ENV
+# INTERFACE GRADIO COMPLÈTE
 # ========================================
 
-def create_hybrid_interface():
-    """Crée l'interface Gradio en utilisant VOS modules existants + .env."""
+def create_complete_interface():
+    """Interface Gradio complète avec tous les modes d'analyse."""
     
-    load_config()
-    
-    with gr.Blocks(
-        title="OCR Juridique - Mode Hybride + .env",
-        theme=gr.themes.Soft()
-    ) as demo:
+    with gr.Blocks(title="OCR Juridique - Version Complète", theme=gr.themes.Soft()) as demo:
         
         gr.Markdown(f"""
-        # 📚 OCR Juridique - Mode Hybride v8.4
+        # 📚 OCR Juridique - Version Complète v8.9
         
-        **Analyse juridique sécurisée** avec architecture 3 étapes et gestion .env
+        **Modes d'analyse disponibles :**
+        - 🚀 **Simple directe** : Analyse en une fois (rapide)
+        - ⚡ **Hybride par chunks** : Découpage intelligent → Extraction → Fusion → Synthèse {('✅' if HYBRID_AVAILABLE or CHUNK_ANALYSIS_AVAILABLE else '⛔')}
         
-        📄 **Étape 1** : Extraction chunks → Modèle rapide (économique)  
-        🔀 **Étape 2** : Fusion + harmonisation → Modèle contexte large  
-        ✨ **Étape 3** : Synthèse narrative → Modèle qualité rédactionnelle
-        
-        **État** : {'✅ Modules + .env disponibles' if MODULES_AVAILABLE and ENV_AVAILABLE else '⚠️ Configuration limitée'}
+        **Modules chargés :**
+        - Traitement fichiers : ✅
+        - Analyse par chunks/hybride : {('✅' if CHUNK_ANALYSIS_AVAILABLE or HYBRID_AVAILABLE else '⛔')}
+        - Gestionnaire prompts : {('✅' if PROMPT_MANAGER_AVAILABLE else '⛔')}
         """)
         
         with gr.Tabs():
             
-            # ======= CONFIGURATION =======
-            with gr.Tab("🔧 Configuration"):
+            # ===== CONFIGURATION =====
+            with gr.Tab("⚙️ Configuration"):
                 with gr.Row():
                     with gr.Column():
                         provider = gr.Radio(
@@ -895,407 +708,316 @@ def create_hybrid_interface():
                             visible=False
                         )
                         
-                        # Configuration arrêt automatique RunPod
-                        with gr.Group(visible=False) as runpod_autostop_group:
-                            gr.Markdown("### ⏱️ Arrêt automatique")
-                            autostop_timeout = gr.Slider(
-                                minimum=5, maximum=60, value=15, step=5,
-                                label="Inactivité (minutes)"
-                            )
-                            configure_autostop_btn = gr.Button(
-                                "⚙️ Configurer arrêt auto", 
-                                variant="secondary"
-                            )
-                        
-                        test_btn = gr.Button("🔍 Tester la connexion", variant="primary")
-                        
-                        status_msg = gr.Textbox(
-                            label="Statut",
-                            value="Prêt" if MODULES_AVAILABLE else "Modules manquants",
-                            interactive=False
-                        )
+                        test_btn = gr.Button("🔍 Tester connexion", variant="primary")
+                        status = gr.Textbox(label="Statut", interactive=False, value="Prêt")
                     
                     with gr.Column():
-                        gr.Markdown("### Modèles par étape")
+                        gr.Markdown("### Modèles")
                         
-                        model_step1 = gr.Dropdown(
+                        model_main = gr.Dropdown(
                             choices=app_state["models_list"],
-                            value="mistral:7b-instruct",
-                            label="Étape 1 - Extraction (rapide)",
-                            allow_custom_value=True
+                            value="mistral:7b",
+                            label="Modèle principal"
                         )
                         
-                        model_step2 = gr.Dropdown(
-                            choices=app_state["models_list"],
-                            value="llama3:latest",
-                            label="Étape 2 - Fusion (contexte large)",
-                            allow_custom_value=True
-                        )
-                        
-                        model_step3 = gr.Dropdown(
-                            choices=app_state["models_list"],
-                            value="llama3:latest",
-                            label="Étape 3 - Synthèse (qualité)",
-                            allow_custom_value=True
-                        )
+                        # Configuration modèles optimisée juridique
+                        with gr.Group(visible=(HYBRID_AVAILABLE or CHUNK_ANALYSIS_AVAILABLE)) as hybrid_models_group:
+                            gr.Markdown("#### 🏛️ Configuration expertise juridique par phase")
+                            
+                            model_step1 = gr.Dropdown(
+                                choices=app_state["models_list"],
+                                value="mistral:7b",
+                                label="⚡ Phase 1 - Extraction juridique",
+                                info="Modèle rapide pour identifier moyens de droit (Mistral 7B optimal)"
+                            )
+                            model_step2 = gr.Dropdown(
+                                choices=app_state["models_list"], 
+                                value="mixtral:8x7b" if "mixtral:8x7b" in app_state["models_list"] else app_state["models_list"][0],
+                                label="🧠 Phase 2 - Fusion procédurale",
+                                info="Raisonnement juridique complexe (Mixtral 8x7B recommandé)"
+                            )
+                            model_step3 = gr.Dropdown(
+                                choices=app_state["models_list"],
+                                value="mixtral:8x7b" if "mixtral:8x7b" in app_state["models_list"] else app_state["models_list"][0],
+                                label="⚖️ Phase 3 - Synthèse d'expertise",
+                                info="Qualité rédactionnelle niveau Barreau (Mixtral 8x7B optimal)"
+                            )
+                            
+                            # Paramètres juridiques optimisés
+                            gr.Markdown("##### ⚙️ Paramètres juridiques optimisés")
+                            
+                            with gr.Row():
+                                chunk_size = gr.Slider(
+                                    3000, 8000, value=5000, step=500,
+                                    label="Taille chunks juridiques",
+                                    info="Chunks plus larges pour contexte procédural"
+                                )
+                                chunk_overlap = gr.Slider(
+                                    200, 800, value=500, step=100,
+                                    label="Chevauchement procédural", 
+                                    info="Continuité entre sections juridiques"
+                                )
                         
                         with gr.Row():
-                            temperature = gr.Slider(0, 2, value=0.2, step=0.1, label="Température")
-                            top_p = gr.Slider(0, 1, value=0.9, step=0.1, label="Top-p")
-                            max_tokens = gr.Slider(500, 8000, value=2000, step=500, label="Max tokens")
+                            temperature = gr.Slider(
+                                0, 1, value=0.3, step=0.1, 
+                                label="Température juridique",
+                                info="0.2-0.4 optimal pour analyses juridiques (déterminisme)"
+                            )
+                            max_tokens = gr.Slider(
+                                1000, 6000, value=4000, step=500, 
+                                label="Longueur analyse",
+                                info="Analyses juridiques détaillées (3000-5000 recommandé)"
+                            )
             
-            # ======= GESTION .ENV =======
-            with gr.Tab("🔐 Gestion .env"):
-                if ENV_AVAILABLE:
-                    gr.Markdown("""
-                    ### 🔐 Configuration sécurisée des clés API
-                    
-                    Gérez vos clés API via le fichier `.env` pour plus de sécurité.
-                    """)
-                    
-                    # Interface de gestion
-                    env_selector, env_value, env_status, env_report = create_env_management_interface()
-                    
-                    # Boutons supplémentaires
-                    with gr.Row():
-                        reload_env_btn = gr.Button("🔄 Recharger .env", variant="secondary")
-                        status_env_btn = gr.Button("📊 Statut complet", variant="primary")
-                    
-                    def reload_env_config():
-                        try:
-                            env_manager.load_env()
-                            return "✅ Configuration .env rechargée"
-                        except Exception as e:
-                            return f"❌ Erreur: {e}"
-                    
-                    def get_env_status():
-                        try:
-                            return env_manager.status_report()
-                        except Exception as e:
-                            return f"❌ Erreur: {e}"
-                    
-                    reload_env_btn.click(reload_env_config, outputs=[env_status])
-                    status_env_btn.click(get_env_status, outputs=[env_report])
-                    
-                else:
-                    gr.Markdown("""
-                    ⚠️ **Gestionnaire .env non disponible**
-                    
-                    Pour activer la gestion sécurisée des clés API:
-                    
-                    1. **Téléchargez** le fichier `env_manager.py`
-                    2. **Placez-le** dans le même dossier que ce script
-                    3. **Créez** un fichier `.env` avec vos clés:
-                    
-                    ```bash
-                    # Exemple de fichier .env
-                    RUNPOD_ENDPOINT=https://api.runpod.ai/v2/votre-endpoint
-                    RUNPOD_TOKEN=votre-token-runpod
-                    OLLAMA_REMOTE_URL=http://votre-serveur:11434
-                    ANTHROPIC_API_KEY=sk-ant-votre-cle
-                    DEFAULT_CHUNK_SIZE=3000
-                    ```
-                    
-                    4. **Redémarrez** l'application
-                    """)
-            
-            # ======= DOCUMENTS =======
+            # ===== DOCUMENTS =====
             with gr.Tab("📄 Documents"):
                 with gr.Row():
                     with gr.Column():
-                        gr.Markdown("### Document 1")
-                        file1 = gr.File(label="Fichier 1", file_types=[".pdf", ".txt", ".docx"])
+                        gr.Markdown("### Document")
+                        file_input = gr.File(label="Fichier", file_types=[".pdf", ".txt", ".docx"])
+                        
                         with gr.Row():
-                            clean1 = gr.Checkbox(label="Nettoyer", value=True)
-                            anon1 = gr.Checkbox(label="Anonymiser", value=False)
-                        text1 = gr.Textbox(label="Texte 1", lines=10)
-                        stats1 = gr.Textbox(label="Statistiques 1", interactive=False)
+                            clean_text = gr.Checkbox(label="Nettoyer", value=True)
+                            anonymize = gr.Checkbox(label="Anonymiser", value=False)
+                        
+                        text_input = gr.Textbox(label="Texte", lines=15)
+                        stats = gr.Textbox(label="Statistiques", interactive=False)
                     
                     with gr.Column():
-                        gr.Markdown("### Document 2")
-                        file2 = gr.File(label="Fichier 2", file_types=[".pdf", ".txt", ".docx"])
-                        with gr.Row():
-                            clean2 = gr.Checkbox(label="Nettoyer", value=True)
-                            anon2 = gr.Checkbox(label="Anonymiser", value=False)
-                        text2 = gr.Textbox(label="Texte 2", lines=10)
-                        stats2 = gr.Textbox(label="Statistiques 2", interactive=False)
-                
-                clear_btn = gr.Button("🗑️ Nettoyer", variant="stop")
-            
-            # ======= ANALYSE =======
-            with gr.Tab("🔍 Analyse"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown("### Mode d'analyse")
+                        gr.Markdown("### Configuration d'analyse")
+                        
                         analysis_mode = gr.Radio(
-                            choices=["Hybride 3 étapes", "Classique direct"],
-                            value="Hybride 3 étapes",
-                            label="Mode"
+                            choices=[mode for mode in ANALYSIS_MODES if 
+                                   mode == "Simple directe" or 
+                                   (mode == "Hybride par chunks" and (CHUNK_ANALYSIS_AVAILABLE or HYBRID_AVAILABLE))],
+                            value="Simple directe",
+                            label="Mode d'analyse"
                         )
                         
-                        # Configuration hybride
-                        with gr.Group() as hybrid_config:
-                            chunk_size = gr.Slider(
-                                1000, 5000, value=DEFAULT_CONFIG["chunk_size"], step=500,
-                                label="Taille chunks"
-                            )
-                            chunk_overlap = gr.Slider(
-                                0, 500, value=DEFAULT_CONFIG["chunk_overlap"], step=50,
-                                label="Chevauchement"
-                            )
+                        # Configuration chunks adaptée juridique
+                        with gr.Group() as chunk_config:
+                            gr.Markdown("##### 📄 Découpage procédural intelligent")
                             
-                            domain = gr.Dropdown(
-                                choices=["Aucun"] + list(SUPPORTED_DOMAINS.values()),
-                                value="Aucun",
-                                label="Domaine spécialisé"
-                            )
-                            
-                            enable_step3 = gr.Checkbox(
-                                label="Synthèse narrative premium (étape 3)",
-                                value=True
-                            )
-                            
-                            synthesis_type = gr.Dropdown(
-                                choices=list(SYNTHESIS_TYPES.values()),
-                                value="Synthèse exécutive",
-                                label="Type de synthèse"
-                            )
+                            with gr.Row():
+                                chunk_size = gr.Slider(
+                                    3000, 8000, value=5000, step=500,
+                                    label="Taille segments juridiques",
+                                    info="Segments plus larges pour contexte procédural complet"
+                                )
+                                chunk_overlap = gr.Slider(
+                                    200, 800, value=500, step=100,
+                                    label="Continuité procédurale",
+                                    info="Chevauchement pour préserver liens juridiques"
+                                )
                         
-                        # Prompts prédéfinis
-                        gr.Markdown("### Prompts")
-                        if MODULES_AVAILABLE:
-                            available_prompts = get_all_prompts_for_dropdown()
-                        else:
-                            available_prompts = ["Analyse juridique par défaut"]
-                        
+                        # Sélection de prompts juridiques
                         prompt_selector = gr.Dropdown(
-                            choices=available_prompts,
-                            label="Prompts prédéfinis"
-                        )
-                        select_prompt_btn = gr.Button("📝 Charger")
-                        prompt_status = gr.Textbox(label="Statut", interactive=False)
-                    
-                    with gr.Column(scale=2):
-                        if MODULES_AVAILABLE:
-                            default_prompt = get_prompt_content("Analyse juridique hybride") or DEFAULT_PROMPT_TEXT
-                        else:
-                            default_prompt = "Tu es un expert juridique. Analyse ce document en détail."
-                        
-                        prompt_text = gr.Textbox(
-                            label="Prompt d'analyse",
-                            lines=10,
-                            value=default_prompt,
-                            placeholder="Décrivez l'analyse souhaitée..."
+                            choices=get_available_prompts(),
+                            value=get_available_prompts()[0] if get_available_prompts() else "",
+                            label="📋 Expertise juridique prédéfinie",
+                            info="Prompts optimisés par spécialité juridique"
                         )
                         
-                        analyze_btn = gr.Button(
-                            "🚀 Lancer l'analyse", 
-                            variant="primary", 
-                            size="lg"
-                        )
+                        load_prompt_btn = gr.Button("📝 Charger prompt")
             
-            # ======= RÉSULTATS =======
+            # ===== ANALYSE =====
+            with gr.Tab("🔍 Analyse"):
+                prompt_text = gr.Textbox(
+                    label="Prompt d'analyse",
+                    lines=12,
+                    value=load_prompt_content(get_available_prompts()[0]) if get_available_prompts() else "",
+                    placeholder="Décrivez l'analyse juridique souhaitée..."
+                )
+                
+                analyze_btn = gr.Button("🚀 Lancer l'analyse", variant="primary", size="lg")
+            
+            # ===== RÉSULTATS =====
             with gr.Tab("📊 Résultats"):
                 result_text = gr.Textbox(
                     label="Résultat de l'analyse",
-                    lines=25,
+                    lines=30,
                     show_copy_button=True
                 )
                 
                 with gr.Row():
+                    clear_btn = gr.Button("🗑️ Nettoyer", variant="stop")
+                    
                     with gr.Column():
-                        with gr.Accordion("📋 Rapport d'analyse", open=False):
-                            analysis_report = gr.Textbox(
-                                label="Détails", lines=8, interactive=False
-                            )
-                    with gr.Column():
-                        with gr.Accordion("🔧 Debug", open=False):
-                            debug_info = gr.Textbox(
-                                label="Informations techniques", lines=8, interactive=False
-                            )
+                        debug_info = gr.Textbox(
+                            label="Informations de debug",
+                            lines=5,
+                            interactive=False
+                        )
         
         # ========================================
         # ÉVÉNEMENTS
         # ========================================
         
-        # Configuration
+        # Configuration provider
+        def on_provider_change(prov):
+            return (
+                gr.update(visible=(prov == "Ollama distant")),
+                gr.update(visible=(prov == "RunPod.io")),
+                gr.update(visible=(prov == "RunPod.io")),
+                f"Provider: {prov}"
+            )
+        
         provider.change(
             on_provider_change,
             inputs=[provider],
-            outputs=[ollama_url, runpod_endpoint, runpod_token, runpod_autostop_group, configure_autostop_btn, status_msg]
+            outputs=[ollama_url, runpod_endpoint, runpod_token, status]
         )
+        
+        # Test connexion et mise à jour des modèles avec sélection intelligente
+        def test_and_update_models(prov, url, endpoint, token):
+            message, models = test_connection_complete(prov, url, endpoint, token)
+            
+            if models:
+                app_state["models_list"] = models
+                
+                # Sélection intelligente des modèles par défaut
+                def smart_select_model(preferred_models, fallback_index=0):
+                    for preferred in preferred_models:
+                        if preferred in models:
+                            return preferred
+                    return models[fallback_index] if len(models) > fallback_index else models[0]
+                
+                # Modèles optimaux par phase
+                step1_model = smart_select_model(["mistral:7b", "mistral:latest", "llama3.1:8b"], 0)
+                step2_model = smart_select_model(["mixtral:8x7b", "llama3.1:8b", "mistral:latest"], 
+                                               min(1, len(models)-1))
+                step3_model = smart_select_model(["llama3.1:8b", "mixtral:8x7b", "mistral:latest"], 
+                                               min(2, len(models)-1))
+                
+                return (
+                    gr.update(choices=models, value=models[0]),  # model_main
+                    gr.update(choices=models, value=step1_model),  # model_step1
+                    gr.update(choices=models, value=step2_model),  # model_step2  
+                    gr.update(choices=models, value=step3_model),  # model_step3
+                    f"✅ {message} | Modèles optimisés: {step1_model} → {step2_model} → {step3_model}"
+                )
+            else:
+                return (
+                    gr.update(), gr.update(), gr.update(), gr.update(),
+                    f"⛔ {message}"
+                )
         
         test_btn.click(
-            test_connection_real,
+            test_and_update_models,
             inputs=[provider, ollama_url, runpod_endpoint, runpod_token],
-            outputs=[model_step1, status_msg]
-        )
-        
-        # Configuration arrêt automatique RunPod
-        configure_autostop_btn.click(
-            configure_runpod_autostop,
-            inputs=[runpod_endpoint, runpod_token, autostop_timeout],
-            outputs=[status_msg]
+            outputs=[model_main, model_step1, model_step2, model_step3, status]
         )
         
         # Gestion fichiers
-        def handle_file1(file):
+        def handle_file_upload(file, clean, anon):
             if file:
-                message, stats, text = process_file_real(file.name, clean1.value, anon1.value)
-                return message, stats, text
+                try:
+                    message, stats_result, text, file_type, anon_report = process_file_to_text(
+                        file.name, clean, anon, force_ocr=False
+                    )
+                    return message, stats_result, text
+                except Exception as e:
+                    return f"⛔ Erreur: {str(e)}", "Erreur", ""
             return "", "0 caractères", ""
         
-        def handle_file2(file):
-            if file:
-                message, stats, text = process_file_real(file.name, clean2.value, anon2.value)
-                return stats, text
-            return "0 caractères", ""
-        
-        file1.change(handle_file1, inputs=[file1], outputs=[status_msg, stats1, text1])
-        file2.change(handle_file2, inputs=[file2], outputs=[stats2, text2])
-        
-        # Prompts
-        select_prompt_btn.click(
-            select_prompt,
-            inputs=[prompt_selector],
-            outputs=[prompt_text, prompt_status]
+        file_input.change(
+            handle_file_upload,
+            inputs=[file_input, clean_text, anonymize],
+            outputs=[status, stats, text_input]
         )
         
-        # Affichage conditionnel config hybride
-        def toggle_config(mode):
-            return gr.update(visible=(mode == "Hybride 3 étapes"))
+        # Chargement de prompts
+        def load_selected_prompt(prompt_name):
+            content = load_prompt_content(prompt_name)
+            return content, f"✅ Prompt '{prompt_name}' chargé"
+        
+        load_prompt_btn.click(
+            load_selected_prompt,
+            inputs=[prompt_selector],
+            outputs=[prompt_text, status]
+        )
+        
+        # Affichage conditionnel de la config hybride selon le mode
+        def toggle_hybrid_config(mode):
+            return gr.update(visible=(mode == "Hybride par chunks"))
         
         analysis_mode.change(
-            toggle_config,
+            toggle_hybrid_config,
             inputs=[analysis_mode],
-            outputs=[hybrid_config]
+            outputs=[hybrid_models_group]
         )
         
         # Analyse principale
-        def route_analysis(mode, text1, text2, prompt, 
-                          model_step1, model_step2, model_step3,
-                          provider, temperature, top_p, max_tokens,
-                          chunk_size, chunk_overlap, domain, synthesis_type, enable_step3,
-                          ollama_url, runpod_endpoint, runpod_token):
+        def run_complete_analysis(text, prompt, mode, model_main, provider, temp, max_tok,
+                                chunk_sz, chunk_ovlp, model1, model2, model3,
+                                ollama_url, runpod_endpoint, runpod_token):
             
-            if mode == "Hybride 3 étapes":
-                return analyze_hybrid_mode(
-                    text1, text2, prompt, model_step1, model_step2, model_step3,
-                    provider, temperature, top_p, max_tokens,
-                    chunk_size, chunk_overlap, domain, synthesis_type, enable_step3,
-                    ollama_url, runpod_endpoint, runpod_token
-                )
-            else:
-                return analyze_classic_mode(
-                    text1, text2, prompt, model_step1, provider, 
-                    temperature, top_p, max_tokens,
-                    ollama_url, runpod_endpoint, runpod_token
-                )
+            models_config = {
+                "step1": model1 if HYBRID_AVAILABLE else model_main,
+                "step2": model2 if HYBRID_AVAILABLE else model_main,
+                "step3": model3 if HYBRID_AVAILABLE else model_main
+            }
+            
+            return analyze_text_complete(
+                text, prompt, mode, model_main, provider, temp, max_tok,
+                chunk_sz, chunk_ovlp, models_config,
+                ollama_url, runpod_endpoint, runpod_token
+            )
         
         analyze_btn.click(
-            route_analysis,
+            run_complete_analysis,
             inputs=[
-                analysis_mode, text1, text2, prompt_text,
-                model_step1, model_step2, model_step3,
-                provider, temperature, top_p, max_tokens,
-                chunk_size, chunk_overlap, domain, synthesis_type, enable_step3,
+                text_input, prompt_text, analysis_mode, model_main, provider, 
+                temperature, max_tokens, chunk_size, chunk_overlap
+            ] + [model_step1, model_step2, model_step3] + [
                 ollama_url, runpod_endpoint, runpod_token
             ],
-            outputs=[result_text, stats1, stats2, debug_info, analysis_report]
+            outputs=[result_text, stats, debug_info, status]
         )
         
         # Nettoyage
+        def clear_all_fields():
+            return "", "", "", "🧹 Interface nettoyée", ""
+        
         clear_btn.click(
             clear_all_fields,
-            outputs=[text1, text2, result_text, stats1, stats2, debug_info, 
-                    prompt_text, status_msg, analysis_report]
-        )
-        
-        # Mise à jour des modèles après test de connexion
-        def update_all_models(provider, ollama_url, runpod_endpoint, runpod_token):
-            dropdown_result, status_result = test_connection_real(provider, ollama_url, runpod_endpoint, runpod_token)
-            return dropdown_result, dropdown_result, dropdown_result, status_result
-        
-        test_btn.click(
-            update_all_models,
-            inputs=[provider, ollama_url, runpod_endpoint, runpod_token],
-            outputs=[model_step1, model_step2, model_step3, status_msg]
+            outputs=[text_input, result_text, stats, status, debug_info]
         )
     
     return demo
 
 # ========================================
-# FONCTION BUILD_UI ADAPTÉE
+# FONCTIONS D'EXPORT
 # ========================================
 
 def build_ui():
-    """Point d'entrée pour main_ocr.py - utilise VOS modules + .env."""
-    print("Construction interface hybride avec modules existants + .env...")
-    print(f"Modules disponibles: {MODULES_AVAILABLE}")
-    print(f"Gestion .env: {'Disponible' if ENV_AVAILABLE else 'Non disponible'}")
-    
-    if MODULES_AVAILABLE:
-        print("✅ Utilisation de vos modules:")
-        print("  - ai_providers.py")
-        print("  - chunck_analysis.py") 
-        print("  - prompt_manager.py")
-        print("  - processing_pipeline.py")
-        print("  - config.py")
-        
-        if ENV_AVAILABLE:
-            print("  - env_manager.py (nouveau)")
-            try:
-                config = get_api_config()
-                print(f"🔑 Config .env: Ollama={bool(config.get('ollama_url'))}, RunPod={bool(config.get('runpod_endpoint'))}")
-            except:
-                print("⚠️ Erreur lecture .env")
-    else:
-        print("⚠️ Certains modules manquants - Mode dégradé")
-    
-    return create_hybrid_interface()
+    """Point d'entrée pour main_ocr.py"""
+    print("🚀 Construction interface complète avec analyse hybride par chunks...")
+    print(f"⚡ Analyse hybride/chunks: {'✅ Disponible' if (CHUNK_ANALYSIS_AVAILABLE or HYBRID_AVAILABLE) else '⛔ Non disponible'}")
+    print(f"📝 Gestionnaire prompts: {'✅ Disponible' if PROMPT_MANAGER_AVAILABLE else '⛔ Non disponible'}")
+    return create_complete_interface()
 
 # ========================================
 # LANCEMENT DIRECT
 # ========================================
 
 if __name__ == "__main__":
-    print("Interface hybride - Test direct avec modules existants + .env")
+    print("🧪 Test interface complète")
+    demo = create_complete_interface()
     
-    # Afficher config .env si disponible
-    if ENV_AVAILABLE:
+    ports_to_try = [7860, 7861, 7862, 7863, 7864]
+    
+    for port in ports_to_try:
         try:
-            print("\n" + "="*50)
-            print("CONFIGURATION .ENV")
-            print("="*50)
-            print(env_manager.status_report())
-            print("="*50 + "\n")
+            print(f"🌐 Lancement sur port {port}")
+            demo.launch(
+                server_port=port,
+                server_name="127.0.0.1",
+                share=False,
+                show_error=True
+            )
+            break
         except Exception as e:
-            print(f"⚠️ Erreur .env: {e}")
-    
-    demo = create_hybrid_interface()
-    
-    # Utiliser config .env pour lancement si disponible, avec port dynamique
-    if ENV_AVAILABLE:
-        try:
-            config = get_app_config()
-            print(f"🌐 Lancement: {config['host']}:{config.get('port', 'auto')}")
-            
-            # Si port spécifié dans .env, l'utiliser, sinon laisser Gradio choisir
-            if config.get('port'):
-                demo.launch(
-                    server_name=config["host"],
-                    server_port=config["port"],
-                    debug=config["debug"]
-                )
-            else:
-                # Port automatique
-                demo.launch(
-                    server_name=config["host"],
-                    debug=config["debug"]
-                )
-        except Exception as e:
-            print(f"⚠️ Erreur config .env: {e}, lancement automatique")
-            demo.launch()  # Port automatique
-    else:
-        print("🌐 Lancement avec port automatique")
-        demo.launch()  # Port automatique
+            print(f"⛔ Port {port} occupé: {e}")
+            continue

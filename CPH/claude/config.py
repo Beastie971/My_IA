@@ -26,7 +26,7 @@ Rédige une synthèse narrative en langage juridique français, sans utiliser de
 
 Prends le point de vue de la partie : ne dis jamais « le document… ». Utilise plutôt « le demandeur », « la partie demanderesse », « Monsieur X », « Madame X », etc.
 
-Ne cite pas les jurisprudences (Cass…), ni les décisions de cour d’appel. Mentionne uniquement les articles de loi et conventions collectives.
+Ne cite pas les jurisprudences (Cass…), ni les décisions de cour d'appel. Mentionne uniquement les articles de loi et conventions collectives.
 
 Structure ta réponse en trois parties distinctes :
 1. Analyse juridique
@@ -38,7 +38,7 @@ Structure ta réponse en trois parties distinctes :
 2. Liste des demandes
 
 Ajoute ensuite la mention :
-« La partie demanderesse sollicite du Conseil de Prud’hommes : »
+« La partie demanderesse sollicite du Conseil de Prud'hommes : »
 Puis liste les demandes chiffrées ou non, en respectant leur formulation exacte.
 3. MOTIVATION
 
@@ -49,7 +49,7 @@ Ajoute enfin une section intitulée « MOTIVATION » qui contient uniquement les
     Sur les dommages et intérêts
     Sur les heures supplémentaires
     Sur la remise des documents de fin de contrat
-    Sur l’article 700 du CPC et les dépens
+    Sur l'article 700 du CPC et les dépens
 
 Ne répète pas les montants ni les arguments dans cette section.
 """
